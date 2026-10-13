@@ -1,0 +1,24 @@
+schema: spec-driven
+context: |
+  Project: herder-plugin-token-usage (greenfield, not a git repo yet).
+  Local/offline Herdr plugin showing cumulative per-session token usage for
+  Claude Code and Codex CLI agents in the Herdr sidebar via pane metadata.
+  Intended stack: Python 3 stdlib only (3.14.8 installed); herdr 0.8.2 installed.
+  Source spec: HERDR_PLUGIN_TOKEN_USAGE_SPEC.md (Spanish). Artifacts in English.
+  Separate adapters per provider; never attribute tokens from another session.
+strict_tdd: true
+testing:
+  runner: "python3 -m unittest discover"
+  framework: unittest (stdlib)
+  layers: {unit: true, integration: false, e2e: false}
+  coverage: {available: false, command: null}
+  quality: {linter: false, type_checker: false, formatter: false}
+  note: "pytest not installed; no tests exist yet. Strict TDD enabled on unittest."
+rules:
+  proposal: {}
+  specs: {}
+  design: {}
+  tasks: {review_budget_lines: 400, delivery_strategy: ask-on-risk}
+  apply: {}
+  verify: {}
+  archive: {}
