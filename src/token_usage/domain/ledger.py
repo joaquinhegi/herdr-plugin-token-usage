@@ -26,17 +26,20 @@ class Ledger:
         return ledger
 
     def apply(self, key: str, call: UsageCall, alias: str | None = None) -> bool:
-        """Merge one call; return True when the stored entry changed.
+        """Merge one call; return True when entries or aliases changed.
 
         ``alias`` is the line's requestId when ``key`` is its message id: it is
         remembered so a later requestId-only line maps to the same entry.
         """
         if key not in self.entries and key in self.aliases:
             key = self.aliases[key]
+        changed = False
         if alias and alias != key:
+            changed = self.aliases.get(alias) != key
             self.aliases[alias] = key
             moved = self.entries.pop(alias, None)  # requestId-only line seen first
             if moved is not None:
+                changed = True
                 existing = self.entries.get(key, (0, 0, 0, 0))
                 self.entries[key] = tuple(max(a, b) for a, b in zip(existing, moved))
                 self.total += sum(self.entries[key]) - sum(existing) - sum(moved)
@@ -44,7 +47,7 @@ class Ledger:
         old = self.entries.get(key, (0, 0, 0, 0))
         merged = tuple(max(a, b) for a, b in zip(old, new))
         if key in self.entries and merged == old:
-            return False
+            return changed
         self.entries[key] = merged
         self.total += sum(merged) - sum(old)
         return True

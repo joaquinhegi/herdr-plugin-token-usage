@@ -29,6 +29,10 @@ class StateStoreTest(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.store = StateStore(self.root)
 
+    def test_trailing_newline_id_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.save_session("abc\n", state())
+
     def test_roundtrip_restores_ledger_with_aliases(self):
         ledger = Ledger()
         ledger.apply("msg_a", UsageCall(2, 3, 0, 0), alias="req_a")

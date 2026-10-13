@@ -9,6 +9,20 @@ from token_usage.domain.usage import UsageCall  # noqa: E402
 
 
 class LedgerTest(unittest.TestCase):
+    def test_apply_true_when_only_alias_learned(self):
+        ledger = Ledger()
+        call = UsageCall(1, 2, 0, 0)
+        self.assertTrue(ledger.apply("msg_1", call))
+        self.assertTrue(ledger.apply("msg_1", call, alias="req_1"))
+        self.assertFalse(ledger.apply("msg_1", call, alias="req_1"))
+
+    def test_apply_true_on_late_binding(self):
+        ledger = Ledger()
+        call = UsageCall(1, 2, 0, 0)
+        ledger.apply("req_1", call)
+        self.assertTrue(ledger.apply("msg_1", call, alias="req_1"))
+        self.assertEqual(ledger.total, 3)
+
     def test_repeated_id_counts_once(self):
         ledger = Ledger()
         call = UsageCall(10, 20, 0, 100)

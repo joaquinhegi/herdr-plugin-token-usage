@@ -34,6 +34,10 @@ class LogTest(unittest.TestCase):
         self.assertIsInstance(handler, RotatingFileHandler)
         self.assertEqual((handler.maxBytes, handler.backupCount), (256 * 1024, 1))
 
+    def test_token_with_trailing_newline_is_redacted(self):
+        tlog.log_event(self.logger, "tick", session="x\n")
+        self.assertIn("session=?", self.text())
+
     def test_event_fields_are_ints_or_safe_tokens_only(self):
         tlog.log_event(self.logger, "tick", lines=3, session="11111111", path="/Users/me/x.jsonl",
                        msg="hello there")

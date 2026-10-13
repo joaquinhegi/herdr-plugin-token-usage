@@ -51,7 +51,7 @@ class StateStore:
         return data
 
     def _session_path(self, session_id: str) -> Path:
-        if not _ID.match(session_id):
+        if not _ID.fullmatch(session_id):
             raise ValueError("invalid session id")
         return self.root / "sessions" / f"{session_id}.json"
 

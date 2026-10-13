@@ -77,6 +77,14 @@ class TailTest(unittest.TestCase):
         self.assertEqual(r2.objects, [{"a": 9}])
         self.assertEqual(r2.undecodable, 0)
 
+    def test_midsize_line_kept_when_much_data_follows(self):
+        mid = b'{"a":"' + b"x" * 100 + b'"}\n'  # > read cap, < fragment cap
+        self.append(mid + b'{"a":2}\n' * 50)  # remaining bytes far exceed the fragment cap
+        tail = JsonlTail(max_read=32, max_fragment=200)
+        r1 = tail.read(self.path, None)
+        self.assertEqual(r1.objects[0]["a"], "x" * 100)
+        self.assertEqual(r1.undecodable, 0)
+
     def test_undecodable_lines_are_counted_and_skipped(self):
         self.append(b'{"a":1}\n\xff\xfe\nnot json\n[1]\n{"a":2}\n')
         r = self.tail.read(self.path, None)

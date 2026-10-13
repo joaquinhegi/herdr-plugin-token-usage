@@ -29,7 +29,7 @@ def close_logger(logger: logging.Logger) -> None:
 def _safe(value: object) -> str:
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
-    if isinstance(value, str) and _TOKEN.match(value):
+    if isinstance(value, str) and _TOKEN.fullmatch(value):
         return value
     return "?"
 
