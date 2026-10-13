@@ -25,7 +25,7 @@ def claude_total(name, ledger=None):
     for obj in load("claude", name):
         parsed = claude.parse_line(obj)
         if parsed is not None:
-            ledger.apply(*parsed)
+            ledger.apply(*parsed, alias=claude.request_alias(obj))
     return ledger
 
 
@@ -46,6 +46,17 @@ class ClaudeParserTest(unittest.TestCase):
         self.assertEqual(ledger.entries["msg_d"], (10, 20, 0, 50))
         self.assertEqual(ledger.entries["req_only"], (3, 4, 5, 6))
         self.assertEqual(ledger.total, 80 + 18)
+
+    def test_subagent_sidechain_lines_are_counted(self):
+        ledger = claude_total("subagent")
+        self.assertEqual(ledger.entries["msg_sub1"], (7, 3, 0, 90))
+        self.assertEqual(ledger.total, 100 + 3)
+
+    def test_request_id_only_duplicate_resolves_to_message_key(self):
+        ledger = claude_total("alias")
+        self.assertEqual(ledger.total, 5)  # not 5 + 5
+        self.assertEqual(list(ledger.entries), ["msg_a"])
+        self.assertEqual(ledger.aliases, {"req_a": "msg_a"})
 
     def test_skips_synthetic_error_and_idless(self):
         ledger = claude_total("synthetic_and_errors")

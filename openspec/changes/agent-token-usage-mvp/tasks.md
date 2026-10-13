@@ -42,11 +42,11 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 2: State + tailer (PR2)
 
-- [ ] 2.1 RED `tests/adapters/test_state_store.py`: atomic write (tmp+fsync+replace), dirty-only, unknown `v` → rebuild, 30-day prune, relative keys only.
-- [ ] 2.2 GREEN `adapters/state_store.py`, `ports.py` (Protocols).
-- [ ] 2.3 RED `test_jsonl_tail.py`: growth, partial line counted once, truncate/rotate rescan, 4 MiB cap, >16 MiB fragment skip, undecodable counted.
-- [ ] 2.4 GREEN `adapters/jsonl_tail.py`.
-- [ ] 2.5 RED+GREEN `adapters/log.py`: rotating 256 KiB×2, no content/paths/messages; sentinel test (state and logs never contain fixture content).
+- [x] 2.1 RED `tests/adapters/test_state_store.py`: atomic write (tmp+fsync+replace), dirty-only, unknown `v` → rebuild, 30-day prune, relative keys only.
+- [x] 2.2 GREEN `adapters/state_store.py`, `ports.py` (Protocols).
+- [x] 2.3 RED `test_jsonl_tail.py`: growth, partial line counted once, truncate/rotate rescan, 4 MiB cap, >16 MiB fragment skip, undecodable counted.
+- [x] 2.4 GREEN `adapters/jsonl_tail.py`.
+- [x] 2.5 RED+GREEN `adapters/log.py`: rotating 256 KiB×2, no content/paths/messages; sentinel test (state and logs never contain fixture content).
 
 ## Slice 3: Mapping + Herdr client (PR3)
 

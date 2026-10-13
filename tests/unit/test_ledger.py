@@ -68,5 +68,15 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(ledger.total, 10)
 
 
+    def test_alias_late_binding_and_restore(self):
+        ledger = Ledger()
+        ledger.apply("req_x", UsageCall(1, 1, 0, 0))  # request-only first
+        ledger.apply("msg_x", UsageCall(1, 1, 0, 0), alias="req_x")
+        self.assertEqual((ledger.total, list(ledger.entries)), (2, ["msg_x"]))
+        restored = Ledger.from_entries(ledger.entries, ledger.aliases)
+        self.assertFalse(restored.apply("req_x", UsageCall(1, 1, 0, 0)))
+        self.assertEqual(restored.total, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

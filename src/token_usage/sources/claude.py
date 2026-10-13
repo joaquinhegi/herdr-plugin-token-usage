@@ -36,3 +36,13 @@ def parse_line(obj: object) -> tuple[str, UsageCall] | None:
     if None in counts or thinking is None:
         return None
     return key, UsageCall(*counts, thinking=thinking)
+
+
+def request_alias(obj: object) -> str | None:
+    """Return ``requestId`` when the line is also keyed by ``message.id``."""
+    if not isinstance(obj, dict) or not isinstance(obj.get("message"), dict):
+        return None
+    request_id = obj.get("requestId")
+    if obj["message"].get("id") and isinstance(request_id, str) and request_id:
+        return request_id
+    return None
