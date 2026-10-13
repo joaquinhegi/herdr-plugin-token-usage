@@ -31,14 +31,14 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 1: Domain + parsers (PR1)
 
-- [ ] 1.0 [APPROVAL] Bootstrap repo: `git init`, `.gitignore` (`__pycache__`, `state/`, `*.log`), initial commit.
-- [ ] 1.1 RED `tests/unit/test_formatting.py`: 950/1250/125400/1200000 → spec strings; ≤80 chars.
-- [ ] 1.2 GREEN `domain/formatting.py`; `domain/usage.py` (UsageCall, total=in+out+cc+cr; thinking 8 case → 135).
-- [ ] 1.3 RED `tests/unit/test_ledger.py`: repeated id once, requestId fallback, field-wise max, replay unchanged, incremental total.
-- [ ] 1.4 GREEN `domain/ledger.py`.
-- [ ] 1.5 Synthetic fixtures `tests/fixtures/claude/{basic,duplicate_ids,synthetic_and_errors,resume_copy}.jsonl`, `codex/{snapshots,null_info}.jsonl` with sentinel strings in content.
-- [ ] 1.6 RED `test_parsers.py`: skip `<synthetic>`/error/id-less; Codex 100,250,250 → 250, null info ignored.
-- [ ] 1.7 GREEN `sources/claude.py`, `sources/codex.py`; decide Codex reasoning tokens (open question).
+- [x] 1.0 [APPROVAL] Bootstrap repo: `git init`, `.gitignore` (`__pycache__`, `state/`, `*.log`), initial commit.
+- [x] 1.1 RED `tests/unit/test_formatting.py`: 950/1250/125400/1200000 → spec strings; ≤80 chars.
+- [x] 1.2 GREEN `domain/formatting.py`; `domain/usage.py` (UsageCall, total=in+out+cc+cr; thinking 8 case → 135).
+- [x] 1.3 RED `tests/unit/test_ledger.py`: repeated id once, requestId fallback, field-wise max, replay unchanged, incremental total.
+- [x] 1.4 GREEN `domain/ledger.py`.
+- [x] 1.5 Synthetic fixtures `tests/fixtures/claude/{basic,duplicate_ids,synthetic_and_errors,resume_copy}.jsonl`, `codex/{snapshots,null_info}.jsonl` with sentinel strings in content.
+- [x] 1.6 RED `test_parsers.py`: skip `<synthetic>`/error/id-less; Codex 100,250,250 → 250, null info ignored.
+- [x] 1.7 GREEN `sources/claude.py`, `sources/codex.py`; Codex total = input + output (cached/reasoning already inside; not added again).
 
 ## Slice 2: State + tailer (PR2)
 
