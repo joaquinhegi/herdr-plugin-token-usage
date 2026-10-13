@@ -22,6 +22,14 @@ class LedgerTest(unittest.TestCase):
         ledger.apply("msg_2", UsageCall(1, 2, 3, 4))
         self.assertEqual(ledger.total, 40)
 
+    def test_total_grows_after_each_of_three_responses(self):
+        ledger = Ledger()
+        totals = []
+        for i, key in enumerate(["msg_1", "msg_2", "msg_3"], start=1):
+            ledger.apply(key, UsageCall(i, i, 0, 10))
+            totals.append(ledger.total)
+        self.assertEqual(totals, [12, 26, 42])
+
     def test_field_wise_max_keeps_streaming_growth(self):
         ledger = Ledger()
         ledger.apply("msg_1", UsageCall(10, 1, 0, 50))

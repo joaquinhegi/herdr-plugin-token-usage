@@ -8,9 +8,9 @@ from dataclasses import dataclass
 class CodexSnapshot:
     """Cumulative ``total_token_usage`` at a point in the rollout.
 
-    Cached tokens are already inside ``input`` and reasoning tokens inside
-    ``output`` (open question resolved: neither is added again), so
-    ``total = input + output``.
+    Assumes cached tokens are already inside ``input`` and reasoning tokens
+    inside ``output`` (unproven; see design.md open questions), so neither is
+    added again and ``total = input + output``.
     """
 
     input: int
