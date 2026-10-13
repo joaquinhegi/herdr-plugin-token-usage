@@ -108,6 +108,6 @@ No migration. Chained slices: (1) domain + parsers, (2) tailer + state, (3) mapp
 
 ## Open Questions
 
-- [ ] Exact socket wire framing for `pane.list`/`pane.report_metadata` (verify against docs during slice 3).
+- [x] Socket wire framing (slice 3 spike, read-only, herdr 0.8.2): newline-delimited JSON over the Unix socket (`HERDR_SOCKET_PATH`). Request `{"id":"req_1","method":"pane.list","params":{}}\n`; response one line `{"id":"req_1","result":{"type":"pane_list","panes":[...]}}\n` (errors: `{"id":..,"error":{"code","message"}}`). Pane keys include `pane_id`, `agent`, `cwd`, `agent_session`; Claude panes carry `agent_session` = `{source:"herdr:claude",agent:"claude",kind:"id",value:<36-char UUID>}` (verified live on 2 panes). VERIFIED for `pane.list` only; `pane.report_metadata` was not exercised (mutating, out of spike scope) and its params stay documented-only. Decision: slice 3b builds socket (reads) + CLI fallback; metadata writes are validated through the CLI path first.
 - [ ] Whether the Codex `output_tokens` value includes `reasoning_output_tokens` and `input_tokens` includes `cached_input_tokens` (fixture-only; affects the Codex total). Slice 1 ASSUMES both (total = input + output; `cache_write_input_tokens` and upstream `total_tokens` ignored). Unproven — validate against real Codex data in slice 6 (compare with `total_tokens`).
 - [ ] Behavior of an absent `$tokens` in a sidebar row (manual check).

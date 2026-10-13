@@ -50,11 +50,11 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 3: Mapping + Herdr client (PR3)
 
-- [ ] 3.1 Spike (read-only): verify socket framing for `pane.list`/`pane.report_metadata` against local herdr 0.8.2 [APPROVAL if it touches herdr state]; record result in design; if unverified, ship CLI-only.
-- [ ] 3.2 RED `test_mapping.py`: `herdr:claude`+`id`+UUID only; Codex/absent/malformed → None; cwd ignored.
-- [ ] 3.3 GREEN `domain/mapping.py`, fixture `herdr/pane_list.json`.
-- [ ] 3.4 RED threat: `../`, symlink escape, non-UUID → None; zero/>1 matches → None + one log line; subagents included.
-- [ ] 3.5 GREEN `adapters/claude_locator.py` (realpath containment).
+- [x] 3.1 Spike (read-only): verify socket framing for `pane.list`/`pane.report_metadata` against local herdr 0.8.2 [APPROVAL if it touches herdr state]; record result in design; if unverified, ship CLI-only.
+- [x] 3.2 RED `test_mapping.py`: `herdr:claude`+`id`+UUID only; Codex/absent/malformed → None; cwd ignored.
+- [x] 3.3 GREEN `domain/mapping.py`, fixture `herdr/pane_list.json`.
+- [x] 3.4 RED threat: `../`, symlink escape, non-UUID → None; zero/>1 matches → None + one log line; subagents included.
+- [x] 3.5 GREEN `adapters/claude_locator.py` (realpath containment).
 - [ ] 3.6 RED threat argv: relative/missing bin rejected; metacharacters literal; no shell; 2 s timeout (fake bin script).
 - [ ] 3.7 GREEN `adapters/herdr_cli.py`; socket client `herdr_socket.py` (AF_UNIX test server) and `herdr_fallback.py` per-call fallback.
 
