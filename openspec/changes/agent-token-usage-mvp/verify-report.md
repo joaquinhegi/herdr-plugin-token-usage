@@ -1,5 +1,146 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:abc1b9dfa2fb497e70ab39026d094346e4386dbbb954d6716e37bae0f572932f
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 3/3
+scenarios: 4/4
+test_command: python3 -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:1b7269679e4340b87856656f97c3cfeefe91beced688274e2fbd810e6aa62318
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 3a (tasks 3.1-3.5)
+
+**Change**: agent-token-usage-mvp
+**Section**: Slice 3a: spike (3.1), strict pane mapping (3.2/3.3), contained Claude transcript locator (3.4/3.5)
+**Candidate**: branch `slice-3a-mapping`, HEAD `3050589` (tree `be8d5dd`), on `slice-2-state` `7f3e7e9`. Commits `6e1915f` (feat: mapping, locator, spike notes) and `3050589` (fix: subagent glob narrowed from `*.jsonl` to `agent-*.jsonl`). Diff `git diff slice-2-state...slice-3a-mapping`: 7 files, +226/-6 (within the 400-line budget).
+**Mode**: Strict TDD
+**Scope note**: Slice 3 was split by the user. Tasks 3.6-3.7 (Herdr CLI, socket and fallback clients) belong to slice 3b and are DEFERRED, not failures. The envelope counts only the session-mapping requirements whose mapping/locator layer is delivered here: 3 requirements and 4 scenarios. "Session change and resume" (2 scenarios) and the tick-level clauses (clearing `tokens`, showing a figure) belong to slice 4. The full change has 17 requirements and 26 scenarios across 4 specs.
+**Evidence revision**: sha256 over the exact bytes `tree:be8d5ddc34ecefcc930349021fecf015bec785db\ntest:sha256:<test output hash>\nbuild:sha256:<build output hash>\n`. The test output contains a wall-clock duration, so its hash is specific to this run.
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Slice 3a tasks total | 5 (3.1-3.5) |
+| Tasks complete | 5 |
+| Tasks incomplete | 0 |
+| Deferred to slice 3b | 3.6, 3.7 (unchecked, out of scope) |
+
+### Build & Tests Execution
+**Build**: Passed. `python3 -m compileall -q src tests`, exit 0, empty output.
+**Tests**: 67 passed, 0 failed, 0 skipped. `python3 -m unittest discover`, exit 0 (Python 3.14.8). 54 prior tests plus 5 mapping and 8 locator tests.
+**Coverage**: Not available (no `coverage` module installed).
+
+### Spec Compliance Matrix (slice 3a scope)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Strict Claude resolution | Same repo, two sessions | `test_mapping > test_two_claude_panes_same_cwd_map_to_own_ids`, `test_claude_locator > test_two_sessions_same_project_map_to_own_files` | COMPLIANT |
+| Strict Claude resolution | Subagents included | `test_claude_locator > test_subagents_are_included_and_other_sessions_are_not`, `test_escaping_subagent_symlink_is_dropped_only` | COMPLIANT |
+| No reliable session, no figure | Missing file | `test_claude_locator > test_missing_logs_one_safe_line`, `test_ambiguous_across_projects_is_none_with_one_line`; `test_mapping > test_codex_absent_and_malformed_value_are_none`, `test_non_dict_agent_session_is_none` | COMPLIANT at locator/mapping layer (None plus one safe diagnostic). "tokens cleared, never 0" deferred to slice 4. |
+| Codex panes unmapped | Codex pane | `test_mapping > test_codex_absent_and_malformed_value_are_none`, `test_each_strict_field_is_required` | COMPLIANT at mapping layer (Codex pane resolves to None; no `~/.codex` access exists). "Only the Claude pane shows a figure" deferred to slice 4. |
+| Session change and resume | New session / Resume | (slice 4) | DEFERRED |
+
+**Compliance summary**: 4/4 in-scope scenarios compliant.
+
+### Correctness (Static Evidence)
+| Check | Status | Notes |
+|-------|--------|-------|
+| Mapping requires `source == "herdr:claude"`, `kind == "id"`, canonical UUID | Implemented | `mapping.py:10-17`. Also requires `agent == "claude"` (stricter than spec, matches the spike record). `UUID.fullmatch` is used; the regex is lowercase-only. |
+| Codex, absent, malformed, non-dict `agent_session` -> None | Implemented | `isinstance(ref, dict)` guard; non-str values rejected. |
+| cwd never consulted | Implemented | No `cwd` read in `mapping.py` or `claude_locator.py`. |
+| Locator UUID gate | Implemented | `claude_locator.py:27` uses `UUID.fullmatch` before any filesystem access. |
+| Realpath containment | Implemented | Root resolved once; main file and every subagent file checked with `realpath(...).is_relative_to(root_real)`. Probes: project-dir symlink, main symlink and subagent symlink escapes rejected; a symlinked projects root is resolved and works. |
+| Subagents limited to `<uuid>/subagents/agent-*.jsonl` | Implemented | Fixed in `3050589`; `notes.jsonl` and other-session subagents excluded. |
+| Zero or >1 matches -> None + one safe log line | Implemented | `log_event(..., "locate_failed", reason=missing|ambiguous, matches=N)`; no id or path. Test asserts the id and root are absent from the line. |
+| Inaccessible entries | Implemented | Probe: an unreadable (mode 000) project directory beside a valid one does not raise (Python 3.14 `Path.is_file` swallows `OSError`); a missing root is caught by `except OSError`. |
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|----------|-----------|-------|
+| Locator: `~/.claude/projects/*/<uuid>.jsonl`, ambiguous -> None + one log line | Yes | Root is injected (`projects_root`), which keeps tests hermetic. |
+| Main + `subagents/agent-*.jsonl` share one session | Yes | After `3050589`. |
+| Session id -> path threat: UUID regex + realpath containment | Yes | See WARNING 2 for the check-to-use gap. |
+| Open Question: socket framing | Resolved | design.md records newline-delimited JSON for `pane.list` (verified) and marks `pane.report_metadata` as documented-only (not exercised). |
+| Spike privacy | Yes | design.md and Engram #159/#162 record pane key names and the `agent_session` shape only. No cwd, title, path or real session id values. The herdr fixture uses `/synthetic/repo` and synthetic UUIDs. |
+
+### TDD Compliance
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Evidence reported | Yes | apply-progress #159 table has rows 3.1, 3.2/3.3, 3.4/3.5 |
+| All tasks have tests | Yes | 3.2/3.3 `tests/unit/test_mapping.py`; 3.4/3.5 `tests/adapters/test_claude_locator.py`; 3.1 is a documented spike |
+| RED confirmed (tests exist) | Yes, with caveat | Mapping RED: 12 subtest errors against a NotImplementedError stub. Locator RED: 3 errors + 2 failures against a None stub; the None-asserting threat tests passed trivially at RED. |
+| GREEN confirmed (tests pass) | Yes | 5/5 mapping, 8/8 locator in this run |
+| Triangulation adequate | Partial | See the mutation replay below and WARNING 1 |
+| Safety net for modified files | Yes | All source/test files are new; 54 prior tests ran before the change |
+
+**RED caveat judgment (mutation replay)**: The tests were replayed against mutated copies extracted with `git archive` into a scratch directory (the repository was not touched).
+| Mutant | Result |
+|--------|--------|
+| `locate` always returns None (apply stub) | 3 errors + 2 failures (positive and log tests catch it) |
+| Containment check removed (`_contained` returns True) | 3 failures: main, project-dir and subagent symlink tests. The threat tests are discriminating. |
+| Subagent glob widened to `*.jsonl` | 1 failure (`notes.jsonl` excluded). Confirms the `3050589` RED. |
+| Mapping `fullmatch` -> `search` | 1 failure (suffix subtest) |
+| Mapping `agent` check dropped | 1 failure |
+| Locator UUID gate removed | Only the `A.upper()` subtest fails, and only because macOS APFS is case-insensitive. On a case-sensitive filesystem this mutant survives the whole file. |
+| Locator `fullmatch` -> `match` | Survives (8/8 pass) |
+
+Verdict on the caveat: the trivially-passing RED is acceptable for the containment tests, which kill the containment-removal mutant. It is not acceptable for the UUID/traversal subtests (WARNING 1).
+
+### Test Layer Distribution
+| Layer | Tests | Files | Tools |
+|-------|-------|-------|-------|
+| Unit | 5 | 1 (`tests/unit/test_mapping.py`) | unittest |
+| Adapter (tempdir, real filesystem and symlinks) | 8 | 1 (`tests/adapters/test_claude_locator.py`) | unittest |
+| E2E | 0 | 0 | not installed |
+| **Total (slice 3a)** | **13** | **2** | |
+
+### Changed File Coverage
+Coverage analysis skipped. No coverage tool detected.
+
+### Assertion Quality
+| File | Line | Assertion | Issue | Severity |
+|------|------|-----------|-------|----------|
+| `tests/adapters/test_claude_locator.py` | 73-78 | `assertIsNone(self.locator.locate(bad))` for `../outside/x`, `..`, `-proj/secret`, `*`, `A + "x"`, `""` | No file exists at any resolved target, so these pass with or without the UUID gate. Precondition does not exercise the guarded path. | WARNING |
+
+**Assertion quality**: 0 CRITICAL, 1 WARNING. No tautologies, ghost loops or mock-heavy tests.
+
+### Quality Metrics
+**Linter**: Not available
+**Type Checker**: Not available
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+1. Locator UUID gate is not proven by the traversal tests. In `test_non_uuid_and_traversal_are_none`, every subtest except `A.upper()` passes even after the gate is removed, and `A.upper()` only fails on a case-insensitive filesystem. Probe: with the gate removed, `locate("../-proj/<A>")` returns a `Located` for `projects/-proj/../-proj/<A>.jsonl`. The shipped code is correct; the test must place a real file at the traversal target (for example `../-proj/<A>` and `<A>x` with a matching `<A>x.jsonl`) so the gate is load-bearing on any filesystem.
+2. Containment is checked at locate time, but `Located.main` and `Located.subagents` are the unresolved paths. A consumer that opens them later follows symlinks again (check-to-use gap). A probe also shows an in-root symlink `<A>.jsonl -> <B>.jsonl` maps session A to B's transcript, which conflicts with "never attribute another session's usage". This needs same-user write access to the projects root, so it is not exploitable remotely. Before slice 4 consumes the locator, return the resolved path and require the resolved basename to be `<uuid>.jsonl` (and the resolved subagent parent to be `<uuid>/subagents`), or open with `O_NOFOLLOW` in the tailer.
+3. apply-progress #159 is stale. Its Learned line still says "Locator globs subagents/*.jsonl", which `3050589` corrected, the TDD table has no row for the `3050589` RED/GREEN, and it reports 225 insertions against an actual 226.
+
+**SUGGESTION**:
+1. `ClaudeLocator.locate(None)` raises `TypeError` from `UUID.fullmatch`. Mapping only yields `str`, but an `isinstance(session_id, str)` guard keeps the adapter total.
+2. The locator logs one line per failed call. Slice 4 polls every 4 s, so a pane with a missing transcript would log continuously; log on state change only.
+3. Both the mapping and locator regexes are lowercase-only. The spike did not record Herdr's UUID casing; uppercase values fail safe (pane shows nothing). On case-insensitive filesystems an uppercase on-disk file name matches a lowercase query (same session, harmless). Record the casing in design.md.
+4. Inside the project loop, `subs` is reassigned for each matching main. This is harmless because more than one match returns None, but collecting subagents after the uniqueness check would be clearer.
+
+### Deferred
+- 3.6/3.7 (slice 3b): Herdr CLI argv threat tests, `herdr_cli.py`, `herdr_socket.py`, `herdr_fallback.py`. `pane.report_metadata` framing is still unverified and is validated through the CLI path first.
+- Session change and resume, tick-level clearing and figure display (slice 4).
+
+### Verdict
+PASS WITH WARNINGS
+All 5 slice-3a tasks are complete, 67/67 tests pass, the build is clean, and 4/4 in-scope session-mapping scenarios are compliant. The locator UUID-gate tests are not discriminating (WARNING 1), and the check-to-use symlink gap must be closed before slice 4 consumes the locator (WARNING 2).
+
+---
+
+## Slice 2 Section (history, unchanged)
+
+```yaml
+schema: gentle-ai.verify-result/v1
 evidence_revision: sha256:e66d53700633d496add4c36b1aa18572084a9460023dc2645e5d8eb2cf5a7696
 verdict: pass_with_warnings
 blockers: 0
