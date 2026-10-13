@@ -38,7 +38,7 @@ class ClaudeLocator:
                 mains.append(main)
                 sub_dir = project / session_id / "subagents"
                 if sub_dir.is_dir():
-                    subs = [f for f in sorted(sub_dir.glob("*.jsonl")) if f.is_file() and self._contained(f, root_real)]
+                    subs = [f for f in sorted(sub_dir.glob("agent-*.jsonl")) if f.is_file() and self._contained(f, root_real)]
         if len(mains) != 1:
             log_event(self.logger, "locate_failed", reason="ambiguous" if mains else "missing", matches=len(mains))
             return None

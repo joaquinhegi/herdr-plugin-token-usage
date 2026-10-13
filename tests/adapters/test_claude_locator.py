@@ -50,6 +50,7 @@ class LocatorTest(unittest.TestCase):
         s1 = self.touch("-proj", A, "subagents", "agent-a.jsonl")
         s2 = self.touch("-proj", A, "subagents", "agent-b.jsonl")
         self.touch("-proj", B, "subagents", "agent-x.jsonl")
+        self.touch("-proj", A, "subagents", "notes.jsonl")  # not an agent-* transcript
         got = self.locator.locate(A)
         self.assertEqual(got.main, main)
         self.assertEqual(sorted(got.subagents), [s1, s2])
