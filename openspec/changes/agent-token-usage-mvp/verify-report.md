@@ -1,5 +1,149 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:f75b3d684ba527d620db52df7d31c20627e7e9dad289b71ef984af0fde26a0d3
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 4/4
+scenarios: 5/5
+test_command: python3 -m unittest discover -v
+test_exit_code: 0
+test_output_hash: sha256:e1e435d38d05adbd3d3a5da1d1f6b777a297301dfce7db50a78cd46c8bd8e91b
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 2
+
+**Change**: agent-token-usage-mvp
+**Section**: Slice 2 (tasks 2.1-2.5) plus user-approved carry-overs (a) subagent `isSidechain` counting and (b) requestId -> message.id alias
+**Candidate**: branch `slice-2-state`, HEAD `7833cdb` (tree `2066ecb`), clean working tree, stacked on `slice-1-domain` (`9bdb344`). Diff reviewed: `git diff slice-1-domain...slice-2-state` (16 files, +541/-9, about 550 changed lines; over the 400-line budget, accepted by the maintainer).
+**Mode**: Strict TDD
+**Scope note**: The envelope counts only slice-2 scoped requirements and scenarios: 4 requirements and 5 scenarios. The full change has 17 requirements and 26 scenarios across 4 specs. Later-slice items are listed as deferred, not as failures. The envelope above describes the slice-2 candidate; the slice-1 section is kept below as history.
+**Evidence revision**: sha256 over `tree:<HEAD tree>\ntest:<test output hash>\nbuild:<build output hash>\n`. The test output contains a wall-clock duration, so its hash is specific to this run.
+
+### Completeness (slice 2)
+| Metric | Value |
+|--------|-------|
+| Tasks total (slice 2) | 5 (2.1-2.5) plus 2 carry-overs |
+| Tasks complete | 5 (`tasks.md` slice-2 items `[x]`); carry-overs (a) and (b) implemented and tested |
+| Tasks incomplete | 0 |
+| Later-slice tasks (3.x-6.x) | Unchecked, out of scope |
+
+### Build & Tests Execution
+**Build**: Passed (`python3 -m compileall -q src tests`, exit 0, empty output)
+**Tests**: 47 passed / 0 failed / 0 skipped (`python3 -m unittest discover -v`, exit 0, Python 3.14.8, `Ran 47 tests ... OK`). New in slice 2: test_state_store 7, test_jsonl_tail 9, test_log 4, test_parsers +2 (12), test_ledger +1 (9).
+**Coverage**: Not available. The `coverage` module is not installed.
+
+### Spec Compliance Matrix (slice-2 scope)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Incremental tail (RF03, C9) | Growing file: half-written final line counted exactly once | `test_jsonl_tail > test_partial_line_is_counted_once_when_completed`, `test_growth_returns_only_new_lines` | COMPLIANT (tailer level; ledger idempotence covered by slice-1 replay tests) |
+| Incremental tail (RF03, C9) | Truncation: rescan without double-counting known ids | `test_jsonl_tail > test_truncate_rescans_from_start`, `test_rotation_new_inode_rescans`; `test_ledger > test_replay_leaves_total_unchanged`; `test_parsers > test_resume_copy_and_replay_do_not_double_count` | COMPLIANT (composed; no single tailer+ledger test, see WARNING 4) |
+| State and retention (RF01, S7) | Pruning after 30 days; state survives restart | `test_state_store > test_prune_removes_sessions_older_than_30_days`, `test_roundtrip_restores_ledger_with_aliases`, `test_unknown_version_or_corrupt_means_rebuild`, `test_rejects_absolute_or_escaping_keys_and_ids` | COMPLIANT |
+| Least privilege and safe logging (S2-S8), state/log part | Content never stored | `test_log > test_sentinel_never_reaches_state_or_logs`, `test_event_fields_are_ints_or_safe_tokens_only`, `test_exception_logs_type_only`, `test_rotation_settings` | COMPLIANT |
+| Claude per-call dedupe, carry-over (b) | Replay with requestId-only duplicate: 5, not 5+5=10, incl. late binding and persisted restore | `test_parsers > test_request_id_only_duplicate_resolves_to_message_key`; `test_ledger > test_alias_late_binding_and_restore`; `test_state_store > test_roundtrip_restores_ledger_with_aliases` | COMPLIANT |
+
+**Compliance summary**: 5/5 slice-2 scenarios compliant.
+
+**Carry-over (a), subagent `isSidechain` lines**: `test_parsers > test_subagent_sidechain_lines_are_counted` passes (total 103, both `isSidechain: true` and `false` counted). This is a characterization test; the verifier confirmed the slice-1 code already produced 103, so no production change and no RED phase applied. File-level subagent mapping remains slice 3.
+
+**Independent probes (verifier, scratchpad only; no source changes)**:
+- Truncation then rotation fed through `Ledger` with an extra requestId-only duplicate: total stayed 32 -> 32 (no double count); inode change detected.
+- Partial final line split mid-JSON, completed, then polled twice more: counted once (0 -> 6 -> 6).
+- Forced `os.replace` failure: no `.tmp` file left in `sessions/`.
+- File keys `/abs`, `../x`, `a/../../x`, `C:x`, `a\b` rejected; session id `../evil` rejected.
+- Behavioral RED for carry-over (b) reproduced: slice-1 code on `alias.jsonl` gives total 10 with entries `msg_a` and `req_a`.
+
+**Deferred to later slices (not failures)**:
+- Subagent file discovery, `realpath` containment, UUID-only resolution: slice 3.
+- Read-only boundaries for subprocess argv and Herdr writes (rest of S2-S8): slices 3 and 5.
+- Prune scheduling (startup and hourly), end-to-end polling, resume-after-restart scenario, publish/clear, `published.json` contents: slice 4.
+- Lifecycle, stop/status, fault isolation: slices 4 and 5.
+- README and SECURITY docs, sidebar patch: slice 6.
+
+### Correctness (Static Evidence)
+| Requirement | Status | Notes |
+|------------|--------|-------|
+| Atomic state write | Implemented | `mkstemp` in the same dir -> write -> `flush` -> `os.fsync` -> `os.replace` (`state_store.py:31-37`); temp unlinked on any exception. No parent-directory fsync (SUGGESTION 2). |
+| Dirty-only writes | Implemented | In-memory payload comparison per path; first save after restart always writes. |
+| Unknown `v` / corrupt -> rebuild | Implemented | `_read` returns `None`; `prune` also deletes such files. |
+| 30-day retention | Implemented | `now - last_seen > 30*86400` pruned; missing `last_seen` kept. |
+| Ids, offsets, counters only; relative keys | Implemented | Session id `^[A-Za-z0-9_-]{1,64}$`; file keys reject `/`, `..`, `\`, `:`. Anchor uses `$` (WARNING 3). |
+| Incremental tail | Implemented | `{inode, dev, size, offset[, skip]}`; inode/dev change or `offset > size` -> offset 0; consumes up to the last `\n`; 4 MiB read cap; undecodable lines counted. Oversized-fragment check uses remaining bytes instead of fragment length (WARNING 1). |
+| Safe logging | Implemented | `RotatingFileHandler` 256 KiB, `backupCount=1` (2 files); values limited to ints or `[A-Za-z0-9_-]{1,40}` tokens, otherwise `?`; exceptions log type name only. |
+| requestId alias | Implemented | `Ledger.aliases` persisted and restored via `from_entries(entries, aliases)`; late binding moves a requestId-only entry under the message id with field-wise max and a corrected total. `apply()` return value is not updated by alias changes (WARNING 2). |
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|----------|-----------|-------|
+| Tailer `{inode, dev, size, offset}`, rescan on inode change or `size < offset` | Yes | Adds a `skip` flag for oversized fragments. |
+| Read <= 4 MiB per tick, consume to last newline | Yes | A single line longer than 4 MiB is read whole (up to 16 MiB), which is reasonable. |
+| Fragment > 16 MiB without newline skipped | Partial | Triggered by remaining file bytes > 16 MiB, not fragment size (WARNING 1). |
+| State schema v1, per-session files, `published.json` | Yes | `"v":1` added on write; `aliases` is a new key (needed by carry-over b), not in the design schema; design.md should be updated (SUGGESTION 6). |
+| Atomic write temp -> fsync -> replace | Yes | |
+| Relative file keys, no absolute paths | Yes | Enforced at save time. |
+| Logs: counts, exception type, pane id, 8-char prefix; never content, messages or paths | Yes | Enforcement is by character class; truncation to an 8-char prefix is left to callers. |
+| Ports as Protocols | Yes | `Clock`, `StateStore`, `TailResult`, `Tailer`; Herdr and locator ports come in slice 3. |
+
+### TDD Compliance
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Evidence reported | Yes | Slice-2 rows in apply-progress #159 (2.1/2.2, 2.3/2.4, 2.5, carry (a), carry (b)). |
+| All tasks have tests | Yes | 2.1/2.2 -> test_state_store.py, 2.3/2.4 -> test_jsonl_tail.py, 2.5 -> test_log.py, carry-overs -> test_parsers.py and test_ledger.py. |
+| RED confirmed (tests exist) | Yes (with caveat) | Verifier replayed the slice-2 tests over slice-1 source: `Ran 30 tests`, `FAILED (errors=10)`, which matches the reported 10 errors (3 module ImportErrors, 1 TypeError on `alias=`, 6 AttributeErrors on `request_alias`). As the actor admitted, the alias RED stopped at the AttributeError and never reached the 5+5=10 assertion. The verifier reproduced the behavioral RED separately (slice-1 code yields 10 on `alias.jsonl`), so the test does guard the real defect. A single commit cannot show RED in history. |
+| GREEN confirmed (tests pass) | Yes | 47/47 pass; reported per-file counts (7, 9, 4) match. |
+| Triangulation adequate | Yes | Tailer: growth, partial, truncate, rotate, two cap cases, fragment skip, undecodable, missing file. State: 7 distinct behaviors. Alias: early binding, late binding, restore. |
+| Safety Net for modified files | Yes | `ledger.py`, `claude.py`, `test_parsers.py`, `test_ledger.py` modified; the 24 prior tests were reported passing first and still pass. |
+
+**TDD Compliance**: 6/6 checks passed
+
+### Test Layer Distribution
+| Layer | Tests | Files | Tools |
+|-------|-------|-------|-------|
+| Unit | 27 | 3 | unittest |
+| Adapter (tempdir I/O) | 20 | 3 | unittest, tempfile |
+| E2E | 0 | 0 | not installed |
+| **Total** | **47** | **6** | |
+
+### Changed File Coverage
+Coverage analysis skipped. No coverage tool was detected.
+
+### Assertion Quality
+**Assertion quality**: All assertions verify real behavior. The sentinel scan loop is guarded by `assertTrue(scanned)` (not a ghost loop). Empty-result assertions (`missing_file`, `unknown_version`) have non-empty companions. `test_atomic_write_uses_fsync_then_replace` asserts mock call order; that is the required behavior, so it is acceptable coupling.
+
+### Quality Metrics
+**Linter**: Not available
+**Type Checker**: Not available
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+1. `jsonl_tail.py:47` decides to skip with `available > self.max_fragment`, where `available` is all remaining bytes, not the fragment length. A line between 4 MiB and 16 MiB at the start of the read window is dropped when more than 16 MiB remains unread (for example, the first scan of a large transcript). Probe: `max_read=32, max_fragment=64`, a 52-byte line followed by 160 bytes was skipped (offset 53, no objects). This deviates from the design ("fragment > 16 MiB ... skipped") and no test covers it. Impact is limited because oversized lines are usually tool results, not usage lines.
+2. `Ledger.apply` (`ledger.py:46`) returns `False` after late binding (entry moved from `req_x` to `msg_x`) and after an alias-only learn (`msg_y` seen again with a new `requestId`), although `entries` and `aliases` changed. If slice 4 uses the return value as a dirty flag, the alias map will not be persisted, and a requestId-only line after restart would double count. `StateStore` payload comparison mitigates this only if callers always call `save_session`.
+3. `_ID` (`state_store.py:12`) and `_TOKEN` (`log.py:8`) use `^...$` with `.match`, and `$` matches before a trailing `\n`. Probe: session id `"abc\n"` was saved as `sessions/abc\n.json`, and log value `"ok\n"` wrote an extra newline. No traversal and no content leak (the character class still applies), but use `fullmatch` or `\Z`.
+4. No test pipes `JsonlTail` output into `Ledger` across a truncation or rotation. The no-double-count guarantee is proven only by composing tailer and ledger tests (and the verifier probe). Add a combined test, at the latest with TickService in slice 4.
+
+**SUGGESTION**:
+1. `prune` globs `*.json` only, so a `.tmp` orphaned by a hard kill between `mkstemp` and `os.replace` is never removed; sweep stale `*.tmp`.
+2. Fsync the parent directory after `os.replace` for durability across power loss.
+3. File keys `""`, `"."` and `"~/x"` are accepted; consider an allowlist (`main` or `subagents/agent-*.jsonl`).
+4. A same-inode truncate that regrows past the old offset between polls is not detected (probe: 1 of 2 new lines returned). This is acceptable for append-only transcripts; document it.
+5. `make_logger` adds a duplicate handler when called twice with the same name.
+6. Update design.md's State Schema with the `aliases` map and the tailer `skip` flag.
+
+### Verdict
+PASS WITH WARNINGS
+All 4 slice-2 scoped requirements and 5/5 scenarios (plus both carry-overs) are covered by passing tests (47/47), the build is clean, and RED was reproduced by the verifier. The warnings are a fragment-skip condition that deviates from the design, an `apply()` change signal that ignores alias updates, `$`-anchored regexes, and a missing combined tailer+ledger test. None of them blocks slice 2.
+
+---
+
+## Slice 1 Section (history, unchanged)
+
+```yaml
+schema: gentle-ai.verify-result/v1
 evidence_revision: sha256:ae822dca66b6ff8188002c11718a94596c1815efada1233082d6dfcf722e88ca
 verdict: pass_with_warnings
 blockers: 0
