@@ -109,5 +109,5 @@ No migration. Chained slices: (1) domain + parsers, (2) tailer + state, (3) mapp
 ## Open Questions
 
 - [ ] Exact socket wire framing for `pane.list`/`pane.report_metadata` (verify against docs during slice 3).
-- [ ] Whether the Codex `output_tokens` value includes `reasoning_output_tokens` (fixture-only; affects the Codex total).
+- [ ] Whether the Codex `output_tokens` value includes `reasoning_output_tokens` and `input_tokens` includes `cached_input_tokens` (fixture-only; affects the Codex total). Slice 1 ASSUMES both (total = input + output; `cache_write_input_tokens` and upstream `total_tokens` ignored). Unproven — validate against real Codex data in slice 6 (compare with `total_tokens`).
 - [ ] Behavior of an absent `$tokens` in a sidebar row (manual check).
