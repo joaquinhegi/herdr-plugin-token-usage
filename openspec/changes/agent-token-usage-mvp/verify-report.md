@@ -1421,3 +1421,106 @@ build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
 FAIL
 
 The suite passes (177/177) and the build is clean, and the patch is careful on files that already have a sidebar layout: it makes minimal edits, preserves comments, verifies with tomllib, refuses unsafe shapes, writes nothing on `--print`, and backs up before an atomic replace. It still fails on C1. On the user's real starting state (no `[ui.sidebar.agents]`), `--apply` silently replaces Herdr's default sidebar with a single guessed row, which defeats the purpose of the patch. Fix C1 (refuse with manual instructions) and W2/W3/W4 before archive.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:d772f4a09966e67300e040fb9bb21b74d064cb6ce2a8af41b78c3f174728cfc4
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 2/2
+scenarios: 2/2
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:b8615edcb22988fae82382e6b5cbbb8927c92579dc6a557dfacbe51897c239d6
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 6a re-verification after the correction
+
+**Change**: agent-token-usage-mvp
+**Candidate**: `git diff 918a1de 0b7f85b` on `slice-6-docs` (HEAD 0b7f85b, tree 21ca81d). Commits 8c585ba (sidebar fixes) and 0b7f85b (docs). 8 files, +154/-80 (overage accepted by the user).
+**Mode**: Strict TDD.
+**Scope**: sidebar-metadata "Approval-gated config patch" (scenario: Custom sidebar) and plugin-lifecycle "Uninstall and documentation" (scenario: Uninstall). 2 requirements, 2 scenarios.
+**Evidence revision**: sha256 over `tree:<tree>\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`.
+**Method**: All execution ran in a git-archive copy under the scratchpad with `python3 -B`. The repo was not touched (`git status` clean). No `~/.config/herdr` was read or written: all experiments used temp dirs, and CLI runs used `env -i` with a temp HOME. Herdr was used only for read-only `--help`, plus a read-only string search of the installed binary for the embedded default config text. `herdr --default-config` was not run.
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Slice 6a tasks | 3 (6.1, 6.2, 6.3), all checked; 6.2 text updated to the new rule (`tasks.md:84`) |
+| Incomplete in 6a scope | 0. 6.4 [APPROVAL] and 5.3a are user-owned and remain unchecked (carried). |
+
+### Build & Tests Execution
+**Build**: Passed. `python3 -B -m compileall -q src tests`, exit 0, empty output.
+**Tests**: Passed. `Ran 183 tests ... OK` (Python 3.14.8), exit 0. This matches the expected 183.
+**Coverage**: Not available.
+
+### Spec Compliance Matrix (slice 6a scope)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Approval-gated config patch | Custom sidebar | `test_sidebar_patch.py > TestPlan.test_custom_claude_row_only_adds_tokens`, `test_rows_and_claude_override_both_get_tokens_idempotent_per_row`, `test_plan_writes_nothing`, `TestCli.test_print_and_apply_via_main` | COMPLIANT |
+| Uninstall and documentation | Uninstall | `TestApply.test_backup_then_atomic_replace` (backup bytes == original), `test_apply_missing_file_refuses_and_second_run_is_noop` (no-backup path is now impossible); runtime rollback `cp .bak-* config.toml` gave a byte-identical original | COMPLIANT (the docs residuals are in W3-R) |
+
+**Compliance summary**: 2/2 scenarios compliant.
+
+### Prior Findings (slice 6a)
+| ID | Status | Evidence |
+|---|---|---|
+| C1 default-layout replacement | RESOLVED | `sidebar_patch.py:99-116` refuses on a missing file, no `[ui.sidebar.agents]`, or no rows. `MINIMAL` was removed, and the only text change is a token insertion (`:123-125`). Runtime check over 16 shapes found no path that creates a `rows` or `rows_by_agent` section. Missing, empty, `[ui]` only, sidebar only, agents with no rows, commented defaults, codex-only override, empty rows, and inline `rows_by_agent` all refuse with `apply` rc 1 and no new files. Mutant Mh (append a rows section when the section is missing) was KILLED. |
+| W1 spec rows + claude override | PARTIAL | `rows` and `rows_by_agent.claude` are both patched (`:110-129`), including when the claude override comes first and the edits are applied in descending order (mutants Md and Me KILLED). Other overrides (for example `codex`) are deliberately left alone (`test_sidebar_patch.py` asserts this), but the spec still says "any `rows_by_agent` overrides" (`specs/sidebar-metadata/spec.md:35`) and has no delta. See W1-R. |
+| W2 symlink + backup mode | RESOLVED | E1 re-run: link kept, target patched, target mode 0600, backup mode 0600, backup == original, nothing extra next to the link. Relative link OK; dangling link refuses (rc 1). `:153-166`. Mutants Mb and Mc KILLED. |
+| W3 uninstall docs | PARTIAL | README.md:37-38 now says to stop first, hedges state-dir removal, and the revert claim is accurate (a config is never created). README.md:36 (Disable) is unchanged, and the shell fallback in :37 fails. See W3-R. |
+| W4 Python 3.11 | RESOLVED | `main.py:5-7` guard checks 3.11; README.md:11 and design.md:5 match; `test_main.py:33-38` simulates 3.10.9. Runtime: `/usr/bin/python3` (3.9.6) gives a clean "3.11 or newer" message with rc 2 for `sidebar-patch` and `stop`. No other 3.10 references remain in src, tests or specs. Side effect, consistent with the docs: the poller now also needs 3.11. Real 3.10 and 3.11 interpreters are not installed, so the 3.10 case is covered only by simulation. |
+| W5 SECURITY handoff wording | RESOLVED | SECURITY.md:21 now names `handoff_failed`, exit 1, and recovery via `start`. This matches `main.py:87-98`. |
+| W6 re-parse check untested (M1) | RESOLVED | `test_fake_header_in_multiline_string_is_refused_by_reparse`. The E4 re-run refuses with "Patched config failed validation." Mutant M1 KILLED. |
+| S2 read inside try | RESOLVED | `:96-104`. A directory or non-UTF-8 file gives a short refusal; the CLI test passes a directory and gets rc 1 with no traceback. Mutant Mi KILLED. |
+| S5 nits | RESOLVED | design.md:30 now admits the PID-reuse window; design.md:64-70 says `skip` is absent unless set; the manual message names the `--config` path (`:24-30`, mutant Mg KILLED). |
+| W7, 5.3a, 6.4, W-R1 | OPEN (carried, out of scope) | |
+
+### `herdr --default-config` advice
+- `herdr --help` (0.8.2) lists `--default-config  Print default configuration and exit`, so the flag exists. It also lists `HERDR_CONFIG_PATH overrides config file path` and `herdr config check`.
+- The default config text embedded in the binary has the sidebar section commented out: `# [ui.sidebar.agents]`, `# rows = [["state_icon", "workspace", "tab"], ["agent"]]`, and `# claude = [...]` under `# [ui.sidebar.agents.rows_by_agent]`. The advice is accurate, but a user who pastes these lines must also uncomment them; the steps do not say so (S-R2). After the paste, a single-line `rows` is patched correctly, and if `$tokens` was already added, re-running `--print` reports a no-op.
+
+### Mutation Summary (archive copies, full suite)
+- KILLED (8): M1, Mb, Mc, Md, Me, Mg, Mh, Mi.
+- SURVIVED (2):
+  - Mf: per-row versus any-row idempotence. The behavior is untested; see R1.
+  - M14: default path (S1 carried).
+
+### Regressions Introduced by the Correction
+- R1 (WARNING, new, carried over): the idempotence rule changed from "any row has `$tokens`" (918a1de, verified noop) to "the last row has `$tokens`" (`sidebar_patch.py:117`). For a config with `$tokens` in a non-last row, for example `rows = [["agent", "$tokens"], ["cwd"]]`, `--apply` now adds a second `"$tokens"` to the last row, and Herdr would show the total twice. The diff makes this visible before approval, and no test pins either behavior (Mf survives). README.md:31 claims "re-runs are no-ops", which holds only for the patch's own output.
+- No other regressions were found. CRLF files still normalize (S3, pre-existing). Non-table `agents` (`[ui.sidebar]\nagents = 1`) still raise an `AttributeError` traceback at `:109`; this is pre-existing and was verified on 918a1de (S-R1).
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|---|---|---|
+| design.md:82 sidebar_patch bullet | Yes | Code matches the rewritten bullet: rows plus the claude override, never creates a section, symlink target patched, same-mode backup, refusals. |
+| design.md:5 Python >= 3.11 | Yes | |
+| design.md:30, :64-70 | Yes | Nits fixed. |
+
+### TDD Compliance
+RED (10 failures, 1 error) and then GREEN (183) are recorded in apply-progress #159. There are 6 new tests, and the old tests were updated to the new rule. The safety-net and triangulate columns are still not reported (W7 carried).
+
+### Issues Found
+**CRITICAL**: None.
+
+**WARNING**:
+- W1-R: `specs/sidebar-metadata/spec.md:35` says "any `rows_by_agent` overrides". The code patches only `rows` and `claude` (`sidebar_patch.py:110-112`). This is harmless, because Codex panes never show `$tokens`, but the spec needs a delta ("`rows` and the claude override") before archive, or a note in the archive.
+- W3-R: README.md:36 still says "Disable: ... (the poller clears its tokens on stop)" and does not tell the user to run `stop` first. Nothing shows that `herdr plugin disable` runs `stop`; `herdr plugin disable --help` says only "Disable a plugin". At README.md:37, the shell fallback `python3 -B src/main.py stop` exits 2 ("HERDR_PLUGIN_STATE_DIR and HERDR_BIN_PATH must be set") unless `HERDR_PLUGIN_STATE_DIR` is exported (verified with `env -i`). "Herdr removes the plugin files" is also unverified for `unlink` of a linked repo.
+- R1 (new, see Regressions): `$tokens` in a non-last row is duplicated on re-apply (`sidebar_patch.py:117`), and the behavior is untested (Mf survives).
+- Carried: W7 (Strict TDD table columns); 5.3a and 6.4 [APPROVAL] unchecked and user-owned; W-R1 open.
+
+**SUGGESTION**:
+- S-R1: Guard `agents` and `by_agent` with `isinstance(..., dict)` at `:109`, so a non-table `agents` value refuses instead of raising a traceback (pre-existing).
+- S-R2: In `_manual` (`:26-29`) and README.md:31, say that `herdr --default-config` prints the sidebar lines commented out, so the user must uncomment them. Mention `herdr config check` and `herdr server reload-config` after editing.
+- S-R3: The backup is created with umask mode and only then chmod'ed (`:156-158`), so a brief 0644 window exists for a 0600 config. Create it with `os.open(..., O_CREAT|O_EXCL|O_WRONLY, mode)`. For a symlinked config, the backup lands next to the target (possibly inside a dotfiles repo), while README.md:38 says "next to the config".
+- S-R4: The default path ignores `HERDR_CONFIG_PATH`, which `herdr --help` documents as an override (pre-existing). Honor it, or document `--config`.
+- Carried: S1 (M14, M8, M12, M13, M18, M22), S3 (CRLF), S4 (TOCTOU), S6 (test stdout noise).
+
+### Verdict
+PASS WITH WARNINGS
+
+183/183 tests pass and the build is clean. C1, W2, W4, W5, W6, S2 and S5 are resolved, with runtime and mutation evidence (M1 is now killed, the E1 symlink case is fixed, and no path creates a rows section). W1 and W3 are partially resolved: the residuals are spec text drift and the disable/stop wording. One new non-critical regression (R1, duplicated `$tokens` when it sits in a non-last row) is carried over under the single-correction rule. The user-owned items 5.3a and 6.4, plus W7 and W-R1, remain open.
