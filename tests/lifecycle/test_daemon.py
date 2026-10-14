@@ -37,7 +37,7 @@ class FakeHerdr:
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(self.tmp.cleanup)  # registered first, so it runs last (LIFO)
         self.dir = Path(self.tmp.name)
         self.logger = tlog.make_logger(self.dir / "logs", "t_daemon_%d" % id(self))
         self.addCleanup(tlog.close_logger, self.logger)
@@ -53,13 +53,17 @@ class Base(unittest.TestCase):
                 box["p"].request_stop()
 
         p = daemon.Poller(self.dir, "/sock/a", tick, self.herdr, self.store, self.clock, self.logger,
-                          sleep=sleep, orphan_after=kw.get("orphan_after", 300))
+                          sleep=sleep, orphan_after=kw.get("orphan_after", 300),
+                          lock_sleep=kw.get("lock_sleep", lambda s: None), mono=kw.get("mono", time.monotonic))
         box["p"] = p
         return p
 
-    def hold_lock(self):
+    def hold_lock(self, pid=None):
+        """Hold the lock like a probe; with pid, like a daemon that recorded itself in the lock file."""
         fd = os.open(self.dir / daemon.LOCK, os.O_CREAT | os.O_RDWR, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if pid is not None:
+            os.write(fd, str(pid).encode())
         self.addCleanup(lambda: Path(f"/dev/fd/{fd}").exists() and self._close(fd))
         return fd
 
@@ -119,6 +123,58 @@ class TestRun(Base):
         self.assertEqual(len(calls), 5)
 
 
+class TestRunHardening(Base):
+    def test_run_retries_lock_so_a_probe_collision_leaves_a_poller(self):
+        fd = self.hold_lock()
+        sleeps, calls = [], []
+
+        def lock_sleep(s):
+            sleeps.append(s)
+            if len(sleeps) == 3:
+                os.close(fd)  # the probe finishes
+
+        self.poller(lambda: calls.append(1), lock_sleep=lock_sleep).run()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(sleeps), 3)
+
+    def test_run_gives_up_after_bounded_retries(self):
+        self.hold_lock()
+        sleeps = []
+        self.assertEqual(self.poller(lambda: None, lock_sleep=sleeps.append).run(), 0)
+        self.assertTrue(0 < len(sleeps) <= 20)
+        self.assertLessEqual(sum(sleeps), 2.0)
+
+    def test_prune_at_startup_and_hourly(self):
+        pruned = []
+        self.store.prune = pruned.append
+        self.poller(lambda: True, sleeps=3, step=2000).run()  # t=1000, 3000, 5000
+        self.assertEqual(pruned, [1000.0, 5000.0])
+
+    def test_signal_handlers(self):
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+            self.addCleanup(signal.signal, sig, signal.getsignal(sig))
+        p = self.poller(lambda: True)
+        p.install_signals()
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            p._stop.clear()
+            signal.getsignal(sig)(sig, None)
+            self.assertTrue(p._stop.is_set())
+
+    def test_cleanup_is_bounded_by_total_deadline(self):
+        now = {"t": 0.0}
+        panes = {f"p{i}": {"session": "s", "value": "1k", "at": 1.0} for i in range(10)}
+        self.store.save_published({"seq": 1, "panes": panes})
+        self.herdr.clear = lambda *a: (self.herdr.cleared.append(a), now.__setitem__("t", now["t"] + 1.0))
+        self.poller(lambda: True, mono=lambda: now["t"]).run()
+        self.assertLess(len(self.herdr.cleared), 10)
+        self.assertEqual(self.store.load_published()["panes"], {})
+        self.assertFalse((self.dir / daemon.PID).exists())
+
+    def test_wait_exceeds_worst_case_cleanup(self):
+        self.assertGreaterEqual(daemon.WAIT_S, daemon.CLEANUP_S + 4.0 + 1.0)
+
+
 class FakePopen:
     calls = []
 
@@ -138,7 +194,7 @@ class TestStart(Base):
     def test_spawn_argv_and_kwargs(self):
         self.assertEqual(self.start(), "started")
         (args, kwargs), = FakePopen.calls
-        self.assertEqual(args[0], [sys.executable, str(MAIN), "run"])
+        self.assertEqual(args[0], [sys.executable, "-B", str(MAIN), "run"])
         self.assertIs(kwargs["start_new_session"], True)
         self.assertIs(kwargs["close_fds"], True)
         for k in ("stdin", "stdout", "stderr"):
@@ -151,13 +207,13 @@ class TestStart(Base):
         self.assertEqual(len(FakePopen.calls), 1)
 
     def test_live_same_socket_is_noop(self):
-        self.hold_lock()
+        self.hold_lock(os.getpid())
         self.write_pid(os.getpid())
         self.assertEqual(self.start(), "running")
         self.assertEqual(FakePopen.calls, [])
 
     def test_changed_socket_terminates_then_respawns(self):
-        fd = self.hold_lock()
+        fd = self.hold_lock(4242)
         self.write_pid(4242)
         sent = []
 
@@ -169,8 +225,41 @@ class TestStart(Base):
         self.assertEqual(sent, [(4242, signal.SIGTERM)])
         self.assertEqual(len(FakePopen.calls), 1)
 
+    def test_unverified_pid_is_never_signaled(self):
+        sent = []
+        victim = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(victim.wait)
+        self.addCleanup(victim.kill)
+        self.hold_lock()  # a probe (or a daemon not yet recorded) holds the lock
+        self.write_pid(victim.pid)
+        daemon.stop(self.dir, kill=lambda p, s: sent.append(p), sleep=lambda s: None,
+                    clock=self.clock.now, wait=0)
+        self.assertEqual(sent, [])
+        self.assertIsNone(victim.poll())
+
+    def test_lock_file_pid_mismatch_is_not_signaled(self):
+        self.hold_lock(111)
+        self.write_pid(222)
+        sent = []
+        daemon.stop(self.dir, kill=lambda p, s: sent.append(p), sleep=lambda s: None, clock=self.clock.now, wait=0)
+        self.assertEqual(sent, [])
+
+    def test_unsafe_pids_are_never_signaled(self):
+        for pid in (0, 1, -1, os.getpid()):
+            fd = self.hold_lock(pid)
+            self.write_pid(pid)
+            sent = []
+            daemon.stop(self.dir, kill=lambda p, s: sent.append(p), sleep=lambda s: None, clock=self.clock.now, wait=0)
+            self.assertEqual(sent, [], pid)
+            os.close(fd)
+
+    def test_probe_clears_stale_lock_file_pid(self):
+        (self.dir / daemon.LOCK).write_text("4242")  # daemon was SIGKILLed
+        self.assertFalse(daemon.is_running(self.dir))
+        self.assertEqual((self.dir / daemon.LOCK).read_text(), "")
+
     def test_changed_socket_wait_is_bounded(self):
-        self.hold_lock()
+        self.hold_lock(4242)
         self.write_pid(4242)
         sleeps = []
 
@@ -181,7 +270,7 @@ class TestStart(Base):
         result = daemon.start(self.dir, "/sock/b", MAIN, popen=FakePopen, kill=lambda *a: None,
                               sleep=sleep, clock=self.clock.now)
         self.assertEqual(result, "failed")
-        self.assertLessEqual(len(sleeps), 6)
+        self.assertLessEqual(len(sleeps), 10)
         self.assertEqual(FakePopen.calls, [])
 
 
@@ -202,39 +291,40 @@ class TestStatus(Base):
 
 class TestRealSpawn(unittest.TestCase):
     def test_start_status_stop_and_missing_env(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            fake = tmp / "herdr"
-            fake.write_text("#!/bin/sh\necho '[]'\n")
-            fake.chmod(0o755)
-            state = tmp / "state"
-            env = {"PATH": os.environ["PATH"], "HOME": str(tmp), "HERDR_SOCKET_PATH": str(tmp / "no.sock"),
-                   "HERDR_PLUGIN_STATE_DIR": str(state), "HERDR_BIN_PATH": str(fake)}
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)  # first registered, last run: killpid below runs before it
+        tmp = Path(tmp.name)
+        fake = tmp / "herdr"
+        fake.write_text("#!/bin/sh\necho '[]'\n")
+        fake.chmod(0o755)
+        state = tmp / "state"
+        env = {"PATH": os.environ["PATH"], "HOME": str(tmp), "HERDR_SOCKET_PATH": str(tmp / "no.sock"),
+               "HERDR_PLUGIN_STATE_DIR": str(state), "HERDR_BIN_PATH": str(fake)}
 
-            def killpid():
-                try:
-                    os.kill(json.loads((state / daemon.PID).read_text())["pid"], signal.SIGKILL)
-                except (OSError, ValueError, KeyError):
-                    pass
+        def killpid():
+            try:
+                os.kill(json.loads((state / daemon.PID).read_text())["pid"], signal.SIGKILL)
+            except (OSError, ValueError, KeyError):
+                pass
 
-            self.addCleanup(killpid)
+        self.addCleanup(killpid)
 
-            def run(cmd, e=env):
-                return subprocess.run([sys.executable, str(MAIN), cmd], env=e, capture_output=True, text=True, timeout=20)
+        def run(cmd, e=env):
+            return subprocess.run([sys.executable, "-B", str(MAIN), cmd], env=e, capture_output=True, text=True, timeout=20)
 
-            bad = run("start", {"PATH": os.environ["PATH"]})
-            self.assertNotEqual(bad.returncode, 0)
-            self.assertNotIn("Traceback", bad.stderr)
-            self.assertEqual(run("start").returncode, 0)
-            pidfile = state / daemon.PID
-            for _ in range(100):
-                if pidfile.exists() and "last_tick" in pidfile.read_text():
-                    break
-                time.sleep(0.1)
-            self.assertIn("running", run("status").stdout)
-            self.assertEqual(run("stop").returncode, 0)
-            self.assertIn("stopped", run("status").stdout)
-            self.assertFalse((state / daemon.PID).exists())
+        bad = run("start", {"PATH": os.environ["PATH"]})
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertNotIn("Traceback", bad.stderr)
+        self.assertEqual(run("start").returncode, 0)
+        pidfile = state / daemon.PID
+        for _ in range(100):
+            if pidfile.exists() and "last_tick" in pidfile.read_text():
+                break
+            time.sleep(0.1)
+        self.assertIn("running", run("status").stdout)
+        self.assertEqual(run("stop").returncode, 0)
+        self.assertIn("stopped", run("status").stdout)
+        self.assertFalse((state / daemon.PID).exists())
 
 
 if __name__ == "__main__":

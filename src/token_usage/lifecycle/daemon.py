@@ -1,4 +1,13 @@
-"""Detached poller lifecycle: flock guard, pidfile, spawn, signals, cleanup."""
+"""Detached poller lifecycle: flock guard, pidfile, spawn, signals, cleanup.
+
+Kill-target identity: the poller holds an exclusive flock on poller.lock for life and,
+right after acquiring it, writes its own pid INTO the lock file. Probes that win the lock
+truncate the file before releasing it, so the lock file holds a pid only while a live
+poller owns the lock (a SIGKILLed poller's leftover is wiped by the next probe). SIGTERM is
+sent only when the pidfile pid equals the lock-file pid, is > 1 and is not this process;
+a probe or a not-yet-registered poller holding the lock is therefore never mistaken for the
+daemon. A poller that collides with a probe retries the lock for ~1 s instead of exiting.
+"""
 
 import fcntl
 import json
@@ -21,7 +30,9 @@ PID = "poller.pid"
 INTERVAL_S = 4.0
 ORPHAN_S = 300.0
 PRUNE_S = 3600.0
-WAIT_S = 5.0
+CLEANUP_S = 3.0   # total shutdown-cleanup budget
+LOCK_TRIES = 10   # run() lock attempts, 0.1 s apart (closes the probe-collision window)
+WAIT_S = 8.0      # handoff wait: CLEANUP_S + one worst-case herdr call (4 s) + margin
 
 
 def _try_lock(state_dir: Path) -> int | None:
@@ -40,8 +51,16 @@ def is_running(state_dir: Path) -> bool:
     fd = _try_lock(Path(state_dir))
     if fd is None:
         return True
+    os.ftruncate(fd, 0)  # we hold the lock, so no poller lives: drop any stale pid
     os.close(fd)
     return False
+
+
+def _lock_pid(state_dir: Path):
+    try:
+        return int((Path(state_dir) / LOCK).read_text().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def read_pidfile(state_dir: Path) -> dict:
@@ -65,12 +84,14 @@ def _write_pidfile(state_dir: Path, info: dict) -> None:
 
 class Poller:
     def __init__(self, state_dir, socket_path, tick, herdr, store, clock, logger,
-                 sleep=None, interval=INTERVAL_S, orphan_after=ORPHAN_S):
+                 sleep=None, interval=INTERVAL_S, orphan_after=ORPHAN_S,
+                 lock_sleep=time.sleep, mono=time.monotonic):
         self.dir, self.socket_path = Path(state_dir), socket_path
         self.tick, self.herdr, self.store, self.clock, self.logger = tick, herdr, store, clock, logger
         self._stop = threading.Event()
         self._sleep = sleep or self._stop.wait
         self.interval, self.orphan_after = interval, orphan_after
+        self._lock_sleep, self._mono = lock_sleep, mono
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -82,14 +103,22 @@ class Poller:
 
     def run(self) -> int:
         fd = _try_lock(self.dir)
+        for _ in range(LOCK_TRIES):
+            if fd is not None:
+                break
+            self._lock_sleep(0.1)  # a probe may hold the lock briefly
+            fd = _try_lock(self.dir)
         if fd is None:
             return 0  # another poller owns the lock
+        os.ftruncate(fd, 0)
+        os.write(fd, str(os.getpid()).encode())
         info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
         try:
             _write_pidfile(self.dir, info)
             self._loop(info)
         finally:
             self._cleanup()
+            os.ftruncate(fd, 0)
             os.close(fd)
         return 0
 
@@ -128,7 +157,11 @@ class Poller:
             previous = self.store.load_published() or {}
             now = self.clock.now()
             actions, state = reconcile(previous, {p: None for p in previous.get("panes", {})}, now, int(now * 1000))
+            deadline = self._mono() + CLEANUP_S
             for action in actions:
+                if self._mono() > deadline:
+                    log_event(self.logger, "cleanup_deadline")
+                    break
                 if isinstance(action, Clear):
                     self._safely("clear_failed", lambda a=action: self.herdr.clear(a.pane_id, SOURCE, TOKEN, a.seq))
             self.store.save_published({"seq": state["seq"], "panes": {}})
@@ -148,7 +181,7 @@ def _wait_free(state_dir, sleep, clock, wait) -> bool:
 
 def _terminate(state_dir, kill, sleep, clock, wait) -> bool:
     pid = read_pidfile(state_dir).get("pid")
-    if isinstance(pid, int) and pid > 1:
+    if isinstance(pid, int) and pid > 1 and pid == _lock_pid(state_dir) and pid != os.getpid():
         try:
             kill(pid, signal.SIGTERM)
         except OSError:
@@ -166,7 +199,7 @@ def start(state_dir, socket_path, main_path, popen=subprocess.Popen, kill=os.kil
         if not _terminate(state_dir, kill, sleep, clock, wait):
             return "failed"
         result = "restarted"
-    popen([sys.executable, str(main_path), "run"], start_new_session=True, close_fds=True,
+    popen([sys.executable, "-B", str(main_path), "run"], start_new_session=True, close_fds=True,
           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return result
 
