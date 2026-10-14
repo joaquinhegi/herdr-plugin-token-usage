@@ -9,6 +9,9 @@ from token_usage.adapters.log import log_event
 from token_usage.domain.mapping import UUID
 
 
+MAX_REMEMBERED = 1024
+
+
 @dataclass
 class Located:
     main: Path
@@ -41,6 +44,8 @@ class ClaudeLocator:
         if len(mains) != 1:
             reason = "ambiguous" if mains else "missing"
             if self._last_failure.get(session_id) != reason:  # log outcome changes only, not every tick
+                if len(self._last_failure) >= MAX_REMEMBERED:  # bound memory: forget the oldest
+                    self._last_failure.pop(next(iter(self._last_failure)))
                 self._last_failure[session_id] = reason
                 log_event(self.logger, "locate_failed", reason=reason, matches=len(mains))
             return None

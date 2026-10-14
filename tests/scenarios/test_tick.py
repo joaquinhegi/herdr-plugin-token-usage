@@ -209,6 +209,22 @@ class TickTest(unittest.TestCase):
         self.assertNotIn(A, log)
         self.assertNotIn("-proj", log)
 
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    def test_unreadable_transcript_logs_only_on_change(self):
+        self.write(A, line("m1", 1200))
+        target = self.base / "projects" / "-proj" / f"{A}.jsonl"
+        self.herdr.panes = [claude_pane("p1", A)]
+        target.chmod(0)
+        self.addCleanup(target.chmod, 0o600)
+        for _ in range(3):
+            self.svc.tick()
+        self.assertEqual(self.log_text().count("transcript_unreadable"), 1)
+
+    def test_tick_reports_herdr_reachability(self):
+        self.assertTrue(self.svc.tick())
+        self.herdr.fail_list = True
+        self.assertFalse(self.svc.tick())
+
     def test_save_failures_do_not_escape_tick(self):
         """plugin-lifecycle: store failures are contained."""
         self.write(A, line("m1", 1200))

@@ -73,9 +73,10 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 5: Lifecycle (PR5)
 
-- [ ] 5.1 RED threat `test_daemon.py`: second `run` exits 0 (flock); stale pidfile replaced; changed `socket_path` → SIGTERM + respawn; Popen argv list, no shell.
-- [ ] 5.2 GREEN `lifecycle/daemon.py`, `src/main.py` (run/start/stop/status; SIGTERM clears tokens; 5 min orphan self-exit).
-- [ ] 5.3 `herdr-plugin.toml` ([[startup]], start/stop/status). [APPROVAL] for `herdr plugin link/enable`.
+- [x] 5.1 RED threat `test_daemon.py`: second `run` exits 0 (flock); stale pidfile replaced; changed `socket_path` → SIGTERM + respawn; Popen argv list, no shell.
+- [x] 5.2 GREEN `lifecycle/daemon.py`, `src/main.py` (run/start/stop/status; SIGTERM clears tokens; 5 min orphan self-exit).
+- [x] 5.3 `herdr-plugin.toml` ([[startup]], start/stop/status) + tomllib manifest test.
+- [ ] 5.3a [APPROVAL] `herdr plugin link /Users/joaquinhegi/Dev/herder-plugin-token-usage` then `herdr plugin enable local.token-usage` (not run; user-owned).
 
 ## Slice 6: Docs + patch + validation (PR6)
 

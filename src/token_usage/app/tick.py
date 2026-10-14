@@ -17,6 +17,7 @@ class TickService:
     def __init__(self, herdr: HerdrPort, locator, tailer: Tailer, store: StateStore, clock, logger: logging.Logger):
         self.herdr, self.locator, self.tailer = herdr, locator, tailer
         self.store, self.clock, self.logger = store, clock, logger
+        self._unreadable: set[str] = set()  # sessions already logged as unreadable
 
     def tick(self) -> bool:
         """Run one tick; False when Herdr was unreachable."""
@@ -78,7 +79,9 @@ class TickService:
         for key, path in paths.items():
             result = self.tailer.read(path, files.get(key))
             if result.failed:  # main or subagent alike: a partial total would be an undercount shown as truth
-                log_event(self.logger, "transcript_unreadable", session=sid[:8])
+                if sid not in self._unreadable:  # log on change only, not every tick
+                    self._unreadable.add(sid)
+                    log_event(self.logger, "transcript_unreadable", session=sid[:8])
                 return None
             for obj in result.objects:
                 parsed = claude.parse_line(obj)
@@ -94,4 +97,5 @@ class TickService:
                 })
             except Exception as exc:  # the total is still right; offsets are re-read idempotently
                 log_exception(self.logger, "save_session_failed", exc)
+        self._unreadable.discard(sid)
         return ledger.total

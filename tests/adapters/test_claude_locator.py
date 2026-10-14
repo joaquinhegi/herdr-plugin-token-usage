@@ -82,6 +82,11 @@ class LocatorTest(unittest.TestCase):
         self.assertIsNone(self.locator.locate(A))
         self.assertEqual(len(self.log_lines()), 2)
 
+    def test_failure_memory_is_capped(self):
+        for i in range(1100):
+            self.locator.locate("%08x-1111-4111-8bbb-111111111111" % i)
+        self.assertLessEqual(len(self.locator._last_failure), 1024)
+
     def test_ambiguous_across_projects_is_none_with_one_line(self):
         self.touch("-p1", f"{A}.jsonl")
         self.touch("-p2", f"{A}.jsonl")
