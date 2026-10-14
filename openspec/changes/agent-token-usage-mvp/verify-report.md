@@ -784,3 +784,144 @@ Survived: L1 `project = mains[main]` (the unresolved project dir; W2), R11c muta
 ### Verdict
 PASS WITH WARNINGS
 111/111 tests pass and the build is clean. All 4 slice-4a tasks are done, with RED replayed and matching the reported evidence. Reconcile implements publish on change, refresh at >= 20 s, clear only when previously published, never `0`, forgetting absent panes, and a monotonic seq. The locator dedupe stays inside the root and attribution-safe, and the tailer bound holds with no data loss. Two warnings remain: a negative age blocks the TTL refresh, and the resolved-main subagent directory has no discriminating test.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:0a7fb01978cd278208256532f52b0e52dbbc1ec32e9cd44c28f225f9abd3d7ae
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 8/8
+scenarios: 12/12
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:31f03259d0b8c254a98c7e1df1b92a552f3e6293625eee42df0ab3a2bf03d436
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 4b (tasks 4.3, 4.4, 4.5, TickService and carry-overs)
+
+**Change**: agent-token-usage-mvp
+**Mode**: Strict TDD
+**Candidate**: branch `slice-4b-tick`, HEAD `620e97b` (tree `00090e8`), commits `2468845` (reconcile negative age), `f65e9e9` (locator pin test), `620e97b` (TickService and scenarios). Diff `git diff slice-4a-reconcile slice-4b-tick`: 8 files, +359/-4.
+**Evidence revision**: sha256 over `tree:00090e89b0ad0d5f1c77373af7e109c89f712235\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`. The test output contains a timing line, so its hash is not reproducible byte for byte.
+**Scope**: Slice-scoped, following the slice 4a convention. There are 8 requirements: Strict Claude resolution, No reliable session no figure, Codex panes unmapped, and Session change and resume (session-mapping); Publish and clear (sidebar-metadata); Fault isolation, and Least privilege and safe logging (plugin-lifecycle); Incremental tail (usage-accounting). There are 12 scenarios: Same repo two sessions, Subagents included, Missing file, Codex pane, New session in same pane, Resume after restart, Unchanged value, Pane closed, Herdr unreachable, Corrupt transcript, Content never stored, Growing file. Out of scope: Handoff, Stale pidfile, No connectivity, Stop (slice 5); Uninstall, Custom sidebar (slice 6); Pruning (state store slice 2, wiring slice 5). The full spec set has 17 requirements and 26 scenarios.
+**Safety**: herdr, real sockets, real `~/.claude` and the network were never used. Tests, mutations, probes and RED replays ran only in a `git archive` copy in the scratchpad, with `python3 -B`. `compileall` also ran only in the scratch copy. Repository `git status --porcelain` is empty.
+
+### Completeness
+| Metric | Value |
+|---|---|
+| Slice 4b tasks | 3 (4.3, 4.4, 4.5) |
+| Complete | 3 (`tasks.md` Slice 4b, all `[x]`) |
+| Incomplete | 0. Slices 5 and 6 are out of scope. |
+
+### Build & Tests
+- Tests: `python3 -B -m unittest discover` exited 0. Ran 127 tests, OK (111 earlier, plus 1 reconcile, 1 locator and 14 tick scenarios).
+- Build: `python3 -B -m compileall -q src tests` exited 0 with empty output.
+- Coverage: skipped because no coverage tool is installed.
+
+### Spec Compliance Matrix
+| Requirement | Scenario | Test | Result |
+|---|---|---|---|
+| Strict Claude resolution | Same repo, two sessions | `test_tick > test_two_sessions_in_two_panes_have_independent_totals` | COMPLIANT (M13 cross-attribution killed) |
+| Strict Claude resolution | Subagents included | `test_claude_locator > test_subagents_are_included_and_other_sessions_are_not`, `test_subagents_are_read_next_to_the_resolved_main` | COMPLIANT at resolution level. The tick-level aggregation has no test (W2, M5 and M9 survived); probe P1 confirmed the behavior. |
+| No reliable session, no figure | Missing file | `test_tick > test_empty_or_missing_session_shows_nothing` | COMPLIANT (M12 killed). The diagnostic `locate_failed` is emitted (probe) but not asserted. |
+| Codex panes unmapped | Codex pane | `test_tick > test_codex_unmapped_and_malformed_panes_publish_nothing` | COMPLIANT |
+| Session change and resume | New session in same pane | `test_tick > test_session_change_in_same_pane_starts_from_new_usage`; `test_reconcile` session change tests | COMPLIANT. Probe P5: A then a B with no transcript gives `clear`. |
+| Session change and resume | Resume after restart | `test_tick > test_resume_after_restart_does_not_double_count` | COMPLIANT on the observable total. The test does not prove the persisted counter is used (M10 survived; W2). |
+| Publish and clear | Unchanged value | `test_tick > test_unchanged_value_refreshes_only_after_20s_with_ttl`, `test_reconcile > test_negative_age_counts_as_stale_and_refreshes` | COMPLIANT (M8 wrong TTL and M20 killed) |
+| Publish and clear | Pane closed | `test_tick > test_closed_pane_is_forgotten_and_other_is_unaffected` | COMPLIANT (this also closes 4a S4) |
+| Publish and clear | Herdr unreachable | `test_tick > test_herdr_unreachable_changes_nothing`, `test_failed_publish_is_not_recorded_and_is_retried`, `test_failed_clear_keeps_record_for_retry`; CLI fallback in `test_herdr_fallback` (slice 3) | COMPLIANT (M2, M3 and M11 killed) |
+| Fault isolation | Corrupt transcript | `test_tick > test_corrupt_session_is_skipped_and_other_is_published` | COMPLIANT for a raising adapter (M1 killed). The real `JsonlTail` never raises on an unreadable file (W1). |
+| Least privilege and safe logging | Content never stored | `test_tick > test_content_and_paths_never_reach_state_or_logs` | COMPLIANT. Probe P6 also scanned for the temp root path and the project slug and found no hits. |
+| Incremental tail | Growing file | `test_tick > test_total_grows_after_new_lines`; tailer tests (slice 2) | COMPLIANT on the total. Reading only new bytes is not pinned at tick level (M15 survived; W2). Probe P2: an idle tick reads 0 bytes, and a growth tick reads only the 147 new bytes. |
+
+**Compliance summary**: 12/12 scenarios have a passing covering test. 4 of them have tick-level gaps, reported as W2.
+
+### Correctness (Static + Probe Evidence)
+| Area | Status | Notes |
+|---|---|---|
+| Pane-to-session mapping each tick | OK | `tick.py:28-30` rebuilds the map from `list_panes` on every tick. It uses `claude_session_id` only, and cwd is never read. |
+| Shared session across two panes | OK | `tick.py:31` computes each distinct session once. Probe P1: two panes on A both get `1.5k tokens`, from 2 reads (main plus 1 subagent). B's subagent is excluded. |
+| Never show 0 | OK | A total of 0 still reaches `desired`, and `reconcile.py:39` turns `<= 0` into Clear or nothing. M12 was killed. |
+| Herdr unreachable | OK | `tick.py:22-26` returns before any state read or write. M11 was killed. |
+| Failed action not persisted | OK | `tick.py:44-49` restores the old record or drops a new one. A failed refresh keeps the old `at`, so it is still stale and is retried. A failed session change keeps the old session, so it is retried. seq still advances, which is harmless. |
+| Per-session isolation | OK | `tick.py:53-59` catches per session and logs the exception type and an 8-character session prefix. |
+| seq | OK | `tick.py:36` passes `int(now*1000)`, and the last seq is reloaded from `published.json`. Probe P4: seqs 1016002, 1016003, 1016004 with a constant clock, and the third came after a restart with the clock moved back 1 h. |
+| File keys | OK | `main` and `subagents/agent-*.jsonl` (`tick.py:70-71`). The store rejects absolute keys (`state_store.py:15-19`), which is why M4 was killed. Probe P1 state keys: `main`, `subagents/agent-x.jsonl`. |
+| Truncation and rotation | OK | Probe P3: a truncate and rewrite with known ids publishes nothing, and a rotation to a new inode with copied history plus 1 new id gives `2.0k` (the new id only). |
+| Unreadable transcript | Deviation | Probe P7: after `chmod 000` on A's main, which had persisted state, the tick keeps publishing `1.2k tokens` and logs no diagnostic. `JsonlTail.read` swallows `OSError` (`jsonl_tail.py:26-30`), and `_read_session` returns the persisted ledger total (`tick.py:86`). (W1) |
+| Logging | OK | Events: `tick`, `session_failed`, `apply_failed`, `herdr_unreachable`, `locate_failed`. They carry the exception type, counts and an 8-character prefix only. `locate_failed` repeats every tick (S1). |
+| Large first scan | Note | Probe P8: a 10.3 MiB transcript publishes `116.5k`, then `232.7k`, then `300.0k` over 3 ticks, because of the 4 MiB per-tick bound. Interim undercounts are visible for a few ticks (S4). |
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|---|---|---|
+| Data Flow: list fails, skip tick, no clears | Yes | |
+| Data Flow order: report/clear, then published.json, then save dirty sessions | Deviation (benign) | Sessions are saved inside `_read_session` (`tick.py:81-85`), before reconcile and apply. This is safe because totals are recomputed from the ledger. |
+| State Schema v1 sessions | Drift | `aliases` is added (`tick.py:84`) and `last_seen` is a float. Neither is in design.md:63-64 (W3). |
+| last_seen and 30-day prune | Partial | `last_seen` updates only when the session is dirty. An open but idle session can be pruned and then rescanned (S5). |
+| File keys relative, no absolute paths | Yes | |
+| Logs: type, counts, pane id, 8-character prefix | Yes | |
+| Tailer per-file `{inode, dev, size, offset}` | Yes | `skip` is an extra internal flag from slice 2. |
+| TTL 60 s, refresh at 20 s | Yes | `TTL_MS` is passed through (`tick.py:43`) |
+
+### TDD Compliance
+| Check | Result | Details |
+|---|---|---|
+| TDD evidence reported | Yes | Engram #159, slice 4b table |
+| RED confirmed | Replayed, but after the fact | The no-op stub over the 14 tick tests gives `FAILED (failures=11)`, which matches the report. Of the 3 that pass under the stub, `herdr_unreachable` and `empty_or_missing` assert only the absence of actions, and `content_never_stored` scans files that do not exist yet. They are guarded by companion non-empty tests. W1 RED replayed: the 4a `reconcile.py` fails the new test (1 failure). |
+| Test-first order | Not followed for 4.3/4.4 | Apply admitted `tick.py` was written before the tests. Both are in one commit (`620e97b`). RED was reconstructed against a stub (W4). |
+| GREEN confirmed | Yes | 127/127 |
+| Triangulation | Partial | 14 scenarios with distinct expected values. Subagent, alias and persistence paths are not exercised at tick level (W2). |
+| Safety net | Yes | reconcile and locator tests were kept, and the tick files are new |
+
+### Test Layer Distribution
+| Layer | Tests | Files |
+|---|---|---|
+| Unit | 1 added | `tests/unit/test_reconcile.py` |
+| Adapter (tempdir) | 1 added | `tests/adapters/test_claude_locator.py` |
+| Scenario (real adapters plus fake Herdr and clock) | 14 | `tests/scenarios/test_tick.py` |
+
+### Assertion Quality
+| File | Line | Assertion | Issue | Severity |
+|---|---|---|---|---|
+| `tests/scenarios/test_tick.py` | 123 | `assertEqual(self.take(), [])` after a restart | Passes even if session state is never persisted (M10), because the transcript is fully re-read | WARNING (W2) |
+| `tests/scenarios/test_tick.py` | 245 | Loop over state and log files | Not a ghost loop: the files exist after the tick (published.json, the session file and the log) | OK |
+
+### Mutation Summary (scratch copy, full suite, `python3 -B`)
+Killed (11): M1 drop the per-session try, M2 persist failed actions, M3 drop the old record on a failed clear, M4 absolute main key, M8 TTL 20000, M11 continue after a list failure, M12 publish a 0 total, M13 cross-session total, M14 no ledger restore, M19 no save_published, M20 trust a negative age.
+Survived (9): M5 absolute subagent keys, M9 skip subagents, M6 do not persist aliases, M7 do not load aliases, M10 never save the session, M15 ignore stored positions (re-read the whole file every tick), M16 drop `last_seen` (the session would then never be pruned, because `state_store.py:75` defaults to `now`), M17 ignore the persisted seq, M18 log the full session id.
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+1. (W1) An unreadable transcript keeps showing its last persisted total, and no diagnostic is logged. spec session-mapping "No reliable session, no figure" says that when the file is inaccessible the pane MUST show nothing and log a diagnostic. `jsonl_tail.py:26-30` returns an empty result on `OSError`, and `tick.py:74-86` then returns the persisted ledger total. Probe P7 (`chmod 000` after the first tick) keeps refreshing `1.2k tokens`. It is the session's own value, so nothing is misattributed. The Corrupt transcript test passes only through a raising fake tailer (`test_tick.py:59-67`). Fix: have the tailer signal an unreadable file (raise, or set a flag), let `_session_total` return None and log `session_failed`, and add a test with a real `chmod 000` file.
+2. (W2) The tick-level wiring for subagents, aliases, session persistence, stored positions, seq and `last_seen` is not pinned by tests. M5, M6, M7, M9, M10, M15, M16 and M17 all survive. Probes P1-P4 show the current behavior is correct, but a regression would pass CI. In particular, Resume after restart (`test_tick.py:115-126`) passes even with no session persistence at all. Add tick tests for: a subagent counted under its parent with a relative key; a requestId-only line after a restart; no re-read across ticks (a counting tailer, or the persisted offset); seq strictly greater after a restart with the clock moved back; `last_seen` present.
+3. (W3) Design doc drift: the session state adds `aliases` (requestId mapped to message id, `tick.py:84`), which is needed for idempotence across restarts, and `last_seen` is a float. Neither appears in the State Schema (design.md:62-64). The save order also differs from the Data Flow diagram. Update design.md, in slice 6 at the latest.
+4. (W4) Strict TDD order was not followed for 4.3/4.4. The implementation was written before the tests, in a single commit, and RED was reconstructed afterwards against a stub. The replay matches the report (11 failures), so the evidence is honest, but it was not test-first.
+
+**SUGGESTION**:
+1. (S1) `locate_failed` is logged on every tick for each missing or ambiguous session (`claude_locator.py:41`). At a 4 s interval that is about 21,600 lines per day, which pushes older diagnostics out of the 512 KiB log budget. Log on state transitions only.
+2. (S2) Performance: every tick re-runs the locator (an `iterdir` over all project dirs, `claude_locator.py:33`), and reloads and parses the full session JSON and ledger (`tick.py:65-69`). Cache per session in memory and reload from the store only at startup.
+3. (S3) An exception from `save_published` propagates out of `tick()` (`tick.py:50`), so the slice 5 loop must catch it. A failing `save_session` turns into `session_failed` and clears a figure that is known. Consider keeping the total and only logging.
+4. (S4) The first scan of a transcript over 4 MiB publishes growing undercounts for a few ticks (P8). Consider withholding the publish until `offset == size`, or draining within a per-tick byte budget.
+5. (S5) `last_seen` changes only on dirty ticks, so a pane that stays open and idle for more than 30 days is pruned and rescanned. Bump `last_seen` at most once a day while the session is mapped, or document the behavior.
+6. (S6) Session state with `v: 1` but the wrong shape (for example `ledger` as a list) fails every tick, because `tick.py:66-69` never rewrites it. Treat shape errors as a rebuild.
+
+### Prior Findings Addressed
+| Finding | Status |
+|---|---|
+| 4a W1: a negative age suppressed the refresh | RESOLVED by 2468845 (`reconcile.py:46`; the test fails on the 4a code) |
+| 4a W2: the resolved-main subagent dir was untested | RESOLVED by f65e9e9 (`test_claude_locator.py:48-56`) |
+| 4a S2: task 4.1 wording | RESOLVED (tasks.md) |
+| 4a S3: persist only applied actions, skip when Herdr is unreachable | RESOLVED (`tick.py:22-26`, `:44-49`; M2, M3 and M11 killed) |
+| 4a S4: explicit Pane closed test | RESOLVED (`test_tick.py:214-223`) |
+| 4a S1 (reconcile previous mutation on the publish path), slice 2 S8 (oversized-line peak memory) | Still open |
+
+### Verdict
+PASS WITH WARNINGS
+127/127 tests pass and the build is clean. All 3 slice 4b tasks are done, and all 12 in-scope scenarios have passing tests. Attribution is safe: the map is rebuilt per tick, each session is read once, and other sessions' subagents are excluded. A 0 is never shown, Herdr failures change nothing, and failed actions are retried. Four warnings remain: an inaccessible transcript still shows its stale total, the tick wiring has test gaps (9 mutations survived), the session schema has drifted from the design, and the test-first order was not followed.
