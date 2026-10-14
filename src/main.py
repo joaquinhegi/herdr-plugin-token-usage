@@ -1,4 +1,4 @@
-"""Plugin entrypoint: argv dispatch only (run | start | stop | status)."""
+"""Plugin entrypoint: argv dispatch only (run | start | stop | status | sidebar-patch)."""
 
 import sys
 
@@ -44,6 +44,9 @@ def _build_poller(state_dir: Path, bin_path: str, socket_path: str | None):
 
 
 def main(argv: list[str]) -> int:
+    if len(argv) > 1 and argv[1] == "sidebar-patch":  # explicit, user-run; never from startup
+        from token_usage.lifecycle import sidebar_patch
+        return sidebar_patch.main(argv[2:])
     if len(argv) != 2 or argv[1] not in COMMANDS:
         print("usage: main.py run|start|stop|status", file=sys.stderr)
         return 2
