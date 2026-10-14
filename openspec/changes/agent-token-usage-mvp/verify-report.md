@@ -1115,3 +1115,169 @@ Survived (7): M1 no prune, M2 prune only at startup, M3 SIGHUP not ignored, M5 `
 ### Verdict
 PASS WITH WARNINGS
 All 151 tests pass and the 4 slice scenarios are covered; the lifecycle core (flock, spawn, signals, orphan guard, status privacy) is correct, but the kill target is not verified against the lock holder (reproduced SIGTERM to an unrelated process in a race window), the handoff wait can strand the plugin without a poller, and manifest runtime assumptions (python3 on PATH >= 3.10, cwd) remain unverified.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:8139aedc694850a46983abf6dd4b7b33aedd0d4544c5c819fef1fb4fed14d217
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 2/2
+scenarios: 4/4
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:6ec061f172fe8b92526950aa3aa10ae89e06d3309267099eb65d47ac3e46e6a4
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 5 re-verification after the correction
+
+**Change**: agent-token-usage-mvp
+**Candidate**: branch `slice-5-lifecycle`, HEAD `fb36d9a` (tree `b164534`). The scope is `git diff e1a989b fb36d9a`: 6 files, +262/-56. The overage was accepted by the user. Commits: e7b435f (lifecycle identity and handoff) and fb36d9a (main guards and `-B`).
+**Mode**: Strict TDD (`openspec/config.yaml:9`).
+**Scope**: The same slice 5 scope as before, from plugin-lifecycle: "Single detached poller" (3 scenarios) and "Stop and status actions" (1 scenario). That is 2 requirements and 4 scenarios. The full change has 17 requirements and 26 scenarios.
+**Evidence revision**: sha256 over `tree:b164534cd9d1402b3c5ab1c94576016ae7b56c6d\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`.
+**Method**: Tests, build, mutations and experiments ran in git-archive copies under the scratchpad with `python3 -B`. The repository was not touched. There was no real herdr, no real socket, and no `herdr plugin link/enable`. Every daemon used a temporary HOME and state directory, a fake bin and a nonexistent socket. After all runs, `pgrep -fl "src/main.py"` printed nothing (exit 1).
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Slice 5 tasks total | 4 (5.1, 5.2, 5.3, 5.3a) |
+| Tasks complete | 3 |
+| Tasks incomplete | 1: 5.3a [APPROVAL] `herdr plugin link/enable`. It is user-owned and intentionally not run (W9). |
+
+### Build & Tests Execution
+**Build**: Passed. `python3 -m compileall -q src tests` ran in a fresh archive copy, with exit 0 and empty output.
+**Tests**: 164 passed, 0 failed, 0 skipped. `python3 -B -m unittest discover` ran with exit 0 on Python 3.14.8. Within that run, 30 lifecycle tests passed in verbose mode (test_daemon, test_main, test_manifest).
+**Coverage**: Not available, because no coverage tool is installed.
+
+### Spec Compliance Matrix (slice 5 scope)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Single detached poller | Handoff re-run | `test_daemon.py > TestRun.test_second_run_exits_zero_without_ticking`, `TestStart.test_live_same_socket_is_noop`, `TestStart.test_changed_socket_terminates_then_respawns` | COMPLIANT |
+| Single detached poller | Stale pidfile | `TestRun.test_stale_pidfile_replaced`, `TestStart.test_stale_pidfile_spawns`, `TestStart.test_probe_clears_stale_lock_file_pid` | COMPLIANT |
+| Single detached poller | No connectivity | `TestRealSpawn.test_start_status_stop_and_missing_env` (real offline daemon) plus the slice 4b tick publishing tests | COMPLIANT (composite) |
+| Stop and status actions | Stop | `TestRun.test_stop_clears_published_persists_and_removes_pidfile`, `TestRealSpawn`, `TestStart.test_unverified_pid_is_never_signaled`, `test_lock_file_pid_mismatch_is_not_signaled`, `test_unsafe_pids_are_never_signaled` | COMPLIANT |
+
+**Compliance summary**: 4/4 scenarios compliant.
+
+### Prior Findings (slice 5)
+| Finding | Status | Evidence |
+|---|---|---|
+| W1: SIGTERM sent to an unverified pid | RESOLVED (a microsecond residual remains, see S-R1) | `daemon.py:184` now signals only when the pidfile pid equals the lock-file pid, the pid is > 1, and it is not the caller's own pid. The poller writes its pid into `poller.lock` right after it gets the flock (`daemon.py:113-114`) and truncates the file before it closes the fd (`daemon.py:121`). A probe truncates the file only while it holds the lock (`daemon.py:54`). **E1 re-run**: the pidfile holds the pid of an unrelated `sleep 60` and a probe holds the lock (empty lock file). `stop()` returned `failed` and the handoff `start()` returned `failed`; the victim was not signaled (`poll()` None) in either case. The tests `test_unverified_pid_is_never_signaled`, `test_lock_file_pid_mismatch_is_not_signaled` and `test_unsafe_pids_are_never_signaled` pass. Mutations N2 (lock-pid check removed) and N8 (own pid allowed) are KILLED. |
+| W3: prune, SIGHUP, SIGINT and `pid > 1` untested | RESOLVED | M1 (no prune) and M2 (prune only at startup) are KILLED by `test_prune_at_startup_and_hourly`. M3 (SIGHUP not ignored) is KILLED by `test_signal_handlers`. M15 (SIGINT unhandled) is KILLED: the handler call raises KeyboardInterrupt and aborts the run. M5 (`pid > 1` removed) is KILLED by `test_unsafe_pids_are_never_signaled`. |
+| W4: input checks in main.py | RESOLVED (two branches remain untested, see S-R3) | `main.py:5-7` checks the version before any PEP 604 import. Under the real `/usr/bin/python3` (3.9.6), `status` exits 2 with "Python 3.10 or newer is required" and no traceback. A state directory under `/nonexistent_root_dir/x` exits 1 with "state directory is not usable" and no traceback (`main.py:60-64`). For `start`, a relative bin, a missing bin and a non-executable bin (`/etc/hosts`) each exit 2 with a short message and no spawn (`main.py:56-58`). `run` with a bad bin exits 1 with `cannot start (HerdrError)`. Mutations M17b (bin check removed), N9 (OSError not caught) and N10 (no version guard) are KILLED. M17 and M20 still survive (S-R3). |
+| W5: probe race | RESOLVED | `daemon.py:105-112`: `run()` retries the lock 10 times, 0.1 s apart. Tests `test_run_retries_lock_so_a_probe_collision_leaves_a_poller` and `test_run_gives_up_after_bounded_retries` pass. N5 (`LOCK_TRIES = 0`) is KILLED. Stress run: 15 real `start`s, each under 6 concurrent `status` loops, lost no poller (0 lost). |
+| W6: handoff wait shorter than cleanup | RESOLVED for the reproduced scenario (a residual remains, see W-R1) | `CLEANUP_S = 3` is checked before each clear (`daemon.py:160-164`), and `WAIT_S = 8` (`daemon.py:35`). A failed handoff now exits 1 and logs `handoff_failed` (`main.py:84-95`). **E2 re-run** (real daemon, 4 published panes, fake herdr at 1.9 s per call, steady state): the handoff `start` returned `restarted` with rc 0 in 5.2 s. The old daemon logged `cleanup_deadline` and exited, and the new daemon is `running ... panes=4`. N6 (no deadline) and N7 (`WAIT_S = 5`) are KILLED. |
+| W8: test cleanup order | RESOLVED | `test_daemon.py` now registers `tmp.cleanup` first, so it runs last (LIFO), and `killpid` runs before it. Mutation N3 makes `TestRealSpawn` fail while its daemon is still alive, and the mutation runner's `pgrep -f <copy>` check found no leaked daemon. |
+| S1: `-B` | RESOLVED | The spawn argv (`daemon.py:202`) and all 4 manifest commands (`herdr-plugin.toml:11,16,21,26`) pass `-B`. No `__pycache__` directory appeared under the copy's `src/` after several real daemons ran from it. N11 is KILLED by `test_spawn_argv_and_kwargs`. |
+| W2: manifest runtime assumptions | OPEN (needs the user's live step) | The manifest still relies on `python3` from PATH and a cwd equal to the plugin root. With Python < 3.10 the plugin now fails cleanly (exit 2) instead of with a traceback, but it still does not run. Confirm during 5.3a. |
+| W9: live link/enable | OPEN | 5.3a is unchecked and user-owned. |
+| W7: Strict TDD table columns | OPEN (not in correction scope) | The apply-progress table (#159) has RED and GREEN columns only, with no TRIANGULATE or SAFETY NET columns. |
+
+### Lock-file pid protocol analysis
+- **Can a probe that truncates race with a daemon writing its pid?** No. The probe truncates only after `flock(LOCK_EX|LOCK_NB)` succeeds (`daemon.py:43,54`). The daemon writes only while it holds the same exclusive flock (`daemon.py:105-114`), and it keeps the flock until after its final truncate (`daemon.py:121-122`). Each caller opens the file separately, so these are separate open file descriptions and the BSD flock excludes them from each other. Stress run: 200 `status` probes (16 in parallel) against a live daemon. In every one the lock file still held the daemon pid, the daemon stayed alive, and there were 0 mismatches.
+- **A SIGKILL leaves the pid in the lock file**: confirmed. After a real SIGKILL, both the lock file and the pidfile still hold the old pid. The next probe (`status`) reported `stopped` and truncated the lock file to `''`. After that, `stop` returned `stopped` without signaling anything, and a fresh `start` recorded the new pid in both files. Note that `start`, `stop` and `status` all probe before they read anything.
+- **Is there a path where a reused pid gets signaled?** Yes, but only in a microsecond window (S-R1). Conditions:
+  1. A daemon P was SIGKILLed, and no probe has run since.
+  2. Process X takes the flock for its first probe, or a new poller does so in `run()`. X is between `flock` (`daemon.py:43`) and its `ftruncate` (`daemon.py:54` or `:113`).
+  3. At that moment, process Y's `is_running` returns True, and Y reads the pidfile and the lock file and finds P in both.
+  4. P has already been reused.
+
+  A deterministic simulation holds the flock without truncating, with P (a `sleep` victim) in both files. In that state `stop()` sent SIGTERM to the victim (rc -15). A similar window exists when a daemon is SIGKILLed between Y's `is_running` and Y's `_terminate`. Both windows are orders of magnitude narrower than the original W1, which needed only a stale pidfile and any lock holder. The docstring claim at `daemon.py:7-8` ("never mistaken") is therefore slightly overstated.
+
+### Mutation Summary (archive copies, full suite, `python3 -B`)
+Killed (16): M1, M2, M3, M5, M15, M17b, N1 (probe does not truncate), N2, N3 (run does not write the pid; `TestRealSpawn` stop fails), N5, N6, N7, N8, N9, N10, N11.
+Survived (5):
+- M17: `start` with the state directory set but no bin. The real code rejects it at `main.py:53`. In the mutant, `isabs(None)` raises a traceback.
+- M20: `_build_poller` exceptions not guarded.
+- N4: the `finally` block does not truncate. This is benign, because the next probe truncates.
+- N12: the `handoff_failed` log is removed.
+- N13: the `cleanup_deadline` log is removed.
+
+No daemon leaked from any mutant run.
+
+### Runtime Experiments
+- **E1**: see W1 above.
+- **E1-residual**: see the lock-file analysis above.
+- **E2 (steady state)**: see W6 above.
+- **E2-grow**: the same setup, but every transcript grows just before the handoff, so the old daemon's in-flight tick is reporting 4 panes at 1.9 s each. The handoff `start` returned `failed` with rc 1 in 8.2 s. The log shows `handoff_failed cmd=?` and then `cleanup_deadline`. The old daemon exited later, and `status` is `stopped`: no poller runs afterwards (W-R1).
+- **E3, E4, bad bin**: see W4 above.
+- **W5 stress**: see W5 above.
+
+### Correctness and Coherence
+| Area | Status | Notes |
+|------|--------|-------|
+| Kill-target identity | OK (one narrow residual) | Pidfile pid = lock-file pid, plus the `> 1` and not-own-pid guards. The design rationale "immune to stale pids and PID reuse" now holds, except for the window in S-R1. |
+| Probe vs. daemon writes | OK | Both sides are serialized by the exclusive flock (see the analysis above). |
+| Run lock retry | OK | It is bounded at about 1 s. A real duplicate poller now waits about 1 s before it exits 0, which is harmless. |
+| Cleanup deadline | OK | The deadline is checked before each clear, so the worst case is 3 s plus one CLI clear (2 s timeout). Clears go through the CLI only, so the 4 s socket-plus-CLI assumption in `daemon.py:35` is conservative. |
+| Handoff wait | Partial | It covers cleanup, but not an in-flight tick that has several slow publish calls (W-R1). |
+| main.py error surface | OK | Version, environment, bin and OSError paths give short messages with no absolute paths. These are asserted in `test_main.py:27-31`. |
+| `-B` and the manifest | OK | Writes stay within the state directory. |
+
+### TDD Compliance
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Evidence reported | Yes | Apply-progress #159 has a RED/GREEN table for every fix. |
+| All fixes have tests | Yes | W1, W3, W4, W5, W6, W8 and S1 each have tests: 13 new tests, 3 updated. |
+| RED confirmed | Yes (self-reported) | The RED reasons are recorded and match the mutation results above. |
+| GREEN confirmed | Yes | 164/164 pass. |
+| Triangulation | Adequate | Kill-target: mismatch, unverified, unsafe pids and the positive respawn case. Lock retry: success after a collision and a bounded give-up. |
+| Safety net for modified files | Not reported | W7 is still open. |
+
+### Test Layer Distribution
+| Layer | Tests | Files | Tools |
+|-------|-------|-------|-------|
+| Unit/adapter | 26 lifecycle | 2 | unittest |
+| Integration (real subprocess) | 4 (TestRealSpawn plus 3 in test_main) | 2 | unittest + subprocess |
+| E2E | 0 | - | not installed |
+
+### Changed File Coverage
+Skipped, because no coverage tool was detected.
+
+### Assertion Quality
+| File | Line | Assertion | Issue | Severity |
+|------|------|-----------|-------|----------|
+| `tests/lifecycle/test_daemon.py` | 175 | `assertGreaterEqual(daemon.WAIT_S, daemon.CLEANUP_S + 4.0 + 1.0)` | It checks a relation between constants and exercises no behavior. Its model of the worst case leaves out the in-flight tick, which E2-grow shows can exceed `WAIT_S`. It does kill N7. | SUGGESTION (folded into W-R1) |
+| `tests/lifecycle/test_daemon.py` | 170 | `assertLess(len(cleared), 10)` | A weak bound: the test passes with any count from 0 to 9. A companion assertion confirms that cleanup completed. | SUGGESTION |
+
+**Assertion quality**: 0 CRITICAL, 0 WARNING. There are no tautologies and no ghost loops: the loops iterate over fixed tuples.
+
+### Quality Metrics
+**Linter**: Not available. **Type Checker**: Not available.
+
+### Issues Found
+**CRITICAL**: None.
+
+**WARNING**:
+- W-R1: residual of W6, pre-existing and narrowed by the correction, carried over. `daemon.py:125-147` and `daemon.py:35`: the handoff wait does not bound a tick that is already running. A SIGTERM that arrives while a tick publishes N changed panes on a slow herdr waits up to about N x 2 s before cleanup starts. Reproduced in E2-grow: `start` returned `failed` after 8.2 s and no poller runs afterwards. The difference from before is that this is now logged as `handoff_failed` and returns exit 1 instead of failing silently. Options:
+  - Check `_stop` between tick actions.
+  - On a wait timeout, spawn anyway and let the new `run()` wait on the lock for longer than `LOCK_TRIES` x 0.1 s.
+- W2: still open. The `python3` on PATH and the cwd assumptions need the user's live 5.3a step.
+- W7: still open and not in correction scope. The Strict TDD table has no TRIANGULATE or SAFETY NET columns.
+- W9: still open. 5.3a [APPROVAL] is unchecked and user-owned.
+
+**SUGGESTION** (new or residual after the correction; carried over under the single-correction rule):
+- S-R1: residual of W1. A microsecond window can still signal a reused pid (`daemon.py:43-54`, `105-113`, `184`); see the lock-file analysis above. The window needs a SIGKILLed daemon, no probe since the kill, a racing first probe or new poller, and a reused pid. One way to close it is to record the start time with the pid in the lock file and compare it with the process start time. Another is to read the lock-file pid only while you hold a shared lock that probes do not take. Also soften the docstring at `daemon.py:7-8`.
+- S-R2: `main.py:94` logs `cmd="start/stop"`, but the log sanitizer turns it into `cmd=?` (seen in E2-grow), so the field carries no information. Pass the real command, for example `cmd=start`.
+- S-R3: M17 survives because no test runs `start` with the state directory set and HERDR_BIN_PATH missing. In the mutant this would raise a `TypeError` traceback at `main.py:56`. M20 survives because `run` with an invalid bin is not tested; manually it exits 1 cleanly. Add both cases to `test_main.py`.
+- S-R4: N12, N13 and N4 survive. The `handoff_failed` and `cleanup_deadline` log events and the truncate in the `finally` block have no assertions.
+- S-R5: `test_daemon.py:175` checks only the relation between the constants. A behavioral handoff test with a slow fake would catch W-R1.
+- Note: a daemon from before the correction writes no pid into the lock file, so the new `stop` and handoff code would return `failed` against it. The plugin was never linked (5.3a), so no such daemon exists in the field and nothing needs to be done.
+- The earlier slice 5 suggestions S2 to S6 are unchanged and stay open.
+
+### Regressions Introduced by the Correction
+None that block.
+- `is_running` now writes to the lock file. That is safe, because it does so only while it holds the exclusive lock.
+- A duplicate `run` now exits after about 1 s instead of immediately.
+- `_log_failed_handoff` can raise OSError on an unusable state directory. It is caught by `main.py:62`, which then prints a second message.
+
+The new non-critical observations are S-R1 to S-R5 above, carried over.
+
+### Verdict
+PASS WITH WARNINGS
+
+164/164 tests pass and the build is clean. W1, W3, W4, W5, W6, W8 and S1 are resolved, with runtime, stress and mutation evidence: 16 of 21 mutants were killed, including every in-scope mutant except M17 and M20 (see S-R3). E1 and E2 no longer reproduce. Two narrow residuals remain and are carried over: an in-flight tick can still exceed the handoff wait (W-R1), and a microsecond pid-reuse window remains (S-R1). W2 and W9 wait on the user's live link/enable step, and W7 is still open.
