@@ -29,13 +29,13 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 1: Port + PosixHost (PR1)
 
-- [ ] 1.1 RED `tests/lifecycle/fake_host.py` + test: daemon start/stop/status use injected `host=` (spec: adapter selection).
-- [ ] 1.2 GREEN `ports.py` `HostPlatform`; `lifecycle/host_posix.py` (fcntl imported inside class); `daemon.py` uses host.
-- [ ] 1.3 RED test: `FallbackHerdr` falls back on `AttributeError`.
-- [ ] 1.4 GREEN `herdr_fallback.py` catch.
-- [ ] 1.5 RED `tests/adapters/test_atomic.py`: transient PermissionError retried; persistent fails after 5 tries.
-- [ ] 1.6 GREEN `adapters/atomic.py`; use in `state_store.py`, `_write_pidfile`.
-- [ ] 1.7 Verify: all 200 existing tests unchanged and green.
+- [x] 1.1 RED `tests/lifecycle/fake_host.py` + test: daemon start/stop/status use injected `host=` (spec: adapter selection).
+- [x] 1.2 GREEN `ports.py` `HostPlatform`; `lifecycle/host_posix.py` (fcntl imported inside class); `daemon.py` uses host.
+- [x] 1.3 RED test: `FallbackHerdr` falls back on `AttributeError`.
+- [x] 1.4 GREEN `herdr_fallback.py` catch.
+- [x] 1.5 RED `tests/adapters/test_atomic.py`: transient PermissionError retried; persistent fails after 5 tries.
+- [x] 1.6 GREEN `adapters/atomic.py`; use in `state_store.py`, `_write_pidfile`.
+- [x] 1.7 Verify: all 200 existing tests unchanged and green.
 
 ## Slice 2a: WindowsHost (PR2a)
 
