@@ -55,8 +55,8 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 - [x] 3.3 GREEN `domain/mapping.py`, fixture `herdr/pane_list.json`.
 - [x] 3.4 RED threat: `../`, symlink escape, non-UUID → None; zero/>1 matches → None + one log line; subagents included.
 - [x] 3.5 GREEN `adapters/claude_locator.py` (realpath containment).
-- [ ] 3.6 RED threat argv: relative/missing bin rejected; metacharacters literal; no shell; 2 s timeout (fake bin script).
-- [ ] 3.7 GREEN `adapters/herdr_cli.py`; socket client `herdr_socket.py` (AF_UNIX test server) and `herdr_fallback.py` per-call fallback.
+- [x] 3.6 RED threat argv: relative/missing bin rejected; metacharacters literal; no shell; 2 s timeout (fake bin script).
+- [x] 3.7 GREEN `adapters/herdr_cli.py`; socket client `herdr_socket.py` (AF_UNIX test server) and `herdr_fallback.py` per-call fallback.
 
 ## Slice 4: Reconcile + TickService (PR4)
 
