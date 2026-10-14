@@ -16,6 +16,9 @@ class TestManifest(unittest.TestCase):
         for key in ("id", "name", "version", "min_herdr_version"):
             self.assertIsInstance(self.m[key], str)
 
+    def test_declares_only_posix_platforms(self):
+        self.assertEqual(self.m["platforms"], ["linux", "macos"])
+
     def test_startup_and_actions_are_argv_lists(self):
         self.assertEqual([s["command"] for s in self.m["startup"]], [["python3", "-B", "src/main.py", "start"]])
         actions = {a["id"]: a["command"] for a in self.m["actions"]}
