@@ -76,14 +76,14 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 - [x] 5.1 RED threat `test_daemon.py`: second `run` exits 0 (flock); stale pidfile replaced; changed `socket_path` → SIGTERM + respawn; Popen argv list, no shell.
 - [x] 5.2 GREEN `lifecycle/daemon.py`, `src/main.py` (run/start/stop/status; SIGTERM clears tokens; 5 min orphan self-exit).
 - [x] 5.3 `herdr-plugin.toml` ([[startup]], start/stop/status) + tomllib manifest test.
-- [ ] 5.3a [APPROVAL] `herdr plugin link /Users/joaquinhegi/Dev/herder-plugin-token-usage` then `herdr plugin enable local.token-usage` (not run; user-owned).
+- [x] 5.3a [APPROVAL] `herdr plugin link <repo>` then `herdr plugin enable local.token-usage` (run by the user; poller started via the `start` action).
 
 ## Slice 6: Docs + patch + validation (PR6)
 
 - [x] 6.1 RED `test_sidebar_patch.py`: custom rows + `rows_by_agent.claude` → diff adds only `$tokens`; refuses when no safe minimal edit; `--print` writes nothing.
 - [x] 6.2 GREEN `lifecycle/sidebar_patch.py` (`--apply` writes timestamped backup; never from startup; rule: add `$tokens` to the last row of `rows` and of the claude override when present; never create a rows section: no file/section/rows → refuse with manual steps; symlink target patched in place). [APPROVAL, user-owned, not run] to run against `~/.config/herdr`.
 - [x] 6.3 `README.md` (total definition, inspected dirs, install/reload/log/disable/uninstall) and `docs/SECURITY.md`.
-- [ ] 6.4 [APPROVAL] Manual validation: two simultaneous Claude sessions show independent totals; restart/resume; check absent `$tokens` row.
+- [ ] 6.4 [APPROVAL] Manual validation: two simultaneous Claude sessions show independent totals (confirmed by the user after adding `$tokens` to `[ui.sidebar.agents]`); restart/resume and absent `$tokens` row still to check.
 
 ## Slice 6b: Hardening carry-overs
 

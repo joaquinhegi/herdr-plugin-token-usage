@@ -12,12 +12,26 @@ Python >= 3.11 (for `tomllib`) as `python3` on the PATH Herdr uses (macOS `/usr/
 
 ## Install
 
+From GitHub:
+
 ```
-herdr plugin link /path/to/this/repo
+herdr plugin install joaquinhegi/herdr-plugin-token-usage
 herdr plugin enable local.token-usage
 ```
 
-The poller starts from `[[startup]]`. Actions: `start`, `stop`, `status`. Reload: run `stop` then `start`.
+From a local clone:
+
+```
+git clone https://github.com/joaquinhegi/herdr-plugin-token-usage
+herdr plugin link /path/to/herdr-plugin-token-usage
+herdr plugin enable local.token-usage
+```
+
+The poller starts from `[[startup]]`, which Herdr runs when it restores a session. Right after enabling, start it once with `herdr plugin action invoke start --plugin local.token-usage`. Actions: `start`, `stop`, `status`. Reload: run `stop` then `start`.
+
+## Contributing
+
+Changes go through pull requests against `main`; the maintainer reviews and merges them. Run `python3 -B -m unittest discover` before opening one.
 
 ## Sidebar
 
