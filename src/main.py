@@ -2,8 +2,8 @@
 
 import sys
 
-if sys.version_info < (3, 10):  # before any import that needs PEP 604 syntax
-    print("token-usage: Python 3.10 or newer is required", file=sys.stderr)
+if sys.version_info < (3, 11):  # before any import that needs tomllib / PEP 604
+    print("token-usage: Python 3.11 or newer is required", file=sys.stderr)
     raise SystemExit(2)
 
 import os  # noqa: E402

@@ -30,12 +30,12 @@ class TestMainErrors(unittest.TestCase):
         self.assertTrue(r.stderr.strip())
 
     def test_old_python_exits_2_with_short_message(self):
-        code = ("import sys, runpy; sys.version_info = (3, 9, 6); sys.argv = [%r, 'status']; "
+        code = ("import sys, runpy; sys.version_info = (3, 10, 9); sys.argv = [%r, 'status']; "
                 "runpy.run_path(%r, run_name='__main__')" % (str(MAIN), str(MAIN)))
         r = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 2)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn("3.10", r.stderr)
+        self.assertIn("3.11", r.stderr)
 
     def test_unwritable_state_dir(self):
         blocker = self.tmp / "file"

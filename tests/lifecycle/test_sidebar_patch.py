@@ -45,7 +45,8 @@ class Base(unittest.TestCase):
 
 class TestPlan(Base):
     def test_custom_claude_row_only_adds_tokens(self):
-        text = self.write(CUSTOM)
+        text = self.write(CUSTOM.split("\n\n")[1])  # no top-level rows: only the override
+        text = self.write("[ui.sidebar.agents]\nspacing = 1\n\n" + text)
         res = sp.plan(self.cfg)
         self.assertEqual(res.status, "patch")
         self.assertEqual(added(res.diff), ['  ["cwd", "$tokens"],'])
@@ -83,15 +84,49 @@ class TestPlan(Base):
                 self.assertEqual(res.status, "refuse")
                 self.assertIn("manual", res.message.lower())
 
-    def test_missing_file_and_missing_section_add_minimal_section(self):
+    def test_missing_file_or_section_refuses_with_manual_steps_for_given_path(self):
+        for text in (None, '[ui]\ntheme = "x"\n', "[ui.sidebar.agents]\nspacing = 1\n"):
+            with self.subTest(text=text):
+                if text is not None:
+                    self.write(text)
+                res = sp.plan(self.cfg)
+                self.assertEqual(res.status, "refuse")
+                self.assertEqual(res.new_text, "")
+                for needle in ("--default-config", "$tokens", "--print", str(self.cfg)):
+                    self.assertIn(needle, res.message)
+                self.assertNotIn("~/.config", res.message)
+
+    def test_rows_and_claude_override_both_get_tokens_idempotent_per_row(self):
+        res = sp.plan(self.write(CUSTOM) and self.cfg)
+        self.assertEqual(added(res.diff), ['  ["agent", "$tokens"],', '  ["cwd", "$tokens"],'])
+        a = tomllib.loads(res.new_text)["ui"]["sidebar"]["agents"]
+        self.assertEqual(a["rows"][-1], ["agent", "$tokens"])
+        self.assertEqual(a["rows_by_agent"]["claude"][-1], ["cwd", "$tokens"])
+        self.assertEqual(a["rows_by_agent"]["codex"], [["agent"]])
+        self.write(res.new_text)
+        self.assertEqual(sp.plan(self.cfg).status, "noop")
+        half = CUSTOM.replace('  ["agent"],\n]', '  ["agent", "$tokens"],\n]')  # only rows already patched
+        self.write(half)
         res = sp.plan(self.cfg)
-        self.assertEqual(res.status, "patch")
-        self.assertIn("/dev/null", res.diff)
-        self.assertEqual(tomllib.loads(res.new_text)["ui"]["sidebar"]["agents"]["rows"], [["agent", "$tokens"]])
-        text = self.write('[ui]\ntheme = "x"')  # no trailing newline
+        self.assertEqual(added(res.diff), ['  ["cwd", "$tokens"],'])
+        self.assertEqual(tomllib.loads(res.new_text)["ui"]["sidebar"]["agents"]["rows"][-1], ["agent", "$tokens"])
+
+    def test_fake_header_in_multiline_string_is_refused_by_reparse(self):
+        self.write('[ui]\nnote = """\n[ui.sidebar.agents]\nrows = [["fake"]]\n"""\n'
+                   '[ui.sidebar.agents]\nrows = [["agent"]]\n')
         res = sp.plan(self.cfg)
-        self.assertTrue(res.new_text.startswith(text + "\n"))
-        self.assertEqual(tomllib.loads(res.new_text)["ui"]["theme"], "x")
+        self.assertEqual(res.status, "refuse")
+        self.assertEqual(res.new_text, "")
+
+    def test_unreadable_inputs_refuse_without_traceback_or_path(self):
+        res = sp.plan(self.dir)  # a directory
+        self.assertEqual(res.status, "refuse")
+        self.cfg.write_bytes(b"\xff\xfe\x00bad")
+        res2 = sp.plan(self.cfg)
+        self.assertEqual(res2.status, "refuse")
+        for r in (res, res2):
+            self.assertNotIn("Errno", r.message)
+            self.assertNotIn("Traceback", r.message)
 
     def test_plan_writes_nothing(self):
         names = sorted(os.listdir(self.dir))
@@ -122,11 +157,36 @@ class TestApply(Base):
         self.assertEqual(sorted(os.listdir(self.dir)), ["config.toml"])
         self.assertEqual(self.cfg.read_text(), "[ui.sidebar.agents]\nspacing = 1\n")
 
-    def test_apply_noop_and_missing_file(self):
-        self.assertEqual(sp.apply(self.cfg), 0)  # creates, nothing to back up
-        self.assertEqual(os.listdir(self.dir), ["config.toml"])
-        self.assertEqual(sp.apply(self.cfg), 0)  # second run: already patched, no new backup
-        self.assertEqual(os.listdir(self.dir), ["config.toml"])
+    def test_apply_missing_file_refuses_and_second_run_is_noop(self):
+        self.assertEqual(sp.apply(self.cfg), 1)  # never creates a config
+        self.assertEqual(os.listdir(self.dir), [])
+        self.write(ROWS_ONLY)
+        self.assertEqual(sp.apply(self.cfg), 0)
+        self.assertEqual(sp.apply(self.cfg), 0)  # already patched: no new backup
+        self.assertEqual(len(os.listdir(self.dir)), 2)
+
+    def test_symlink_target_is_patched_in_place_and_link_kept(self):
+        real_dir = self.dir / "real"
+        real_dir.mkdir()
+        target = real_dir / "config.toml"
+        target.write_text(ROWS_ONLY)
+        link = self.dir / "link.toml"
+        link.symlink_to(target)
+        self.assertEqual(sp.apply(link), 0)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.path.realpath(link), os.path.realpath(target))
+        self.assertIn("$tokens", target.read_text())
+        backups = [p.name for p in real_dir.iterdir() if ".bak-" in p.name]
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["link.toml", "real"])
+
+    def test_backup_preserves_private_mode(self):
+        self.write(ROWS_ONLY)
+        self.cfg.chmod(0o600)
+        self.assertEqual(sp.apply(self.cfg), 0)
+        backup = next(p for p in self.dir.iterdir() if ".bak-" in p.name)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o600)
 
 
 class TestCli(Base):
@@ -152,10 +212,15 @@ class TestCli(Base):
         for args in ((), ("--print", "--apply"), ("--config", str(self.cfg))):
             self.assertEqual(self.run_cli(*args).returncode, 2)
 
+    def test_directory_config_is_short_error_not_traceback(self):
+        r = self.run_cli("--apply", "--config", str(self.dir))
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_default_config_is_under_home_and_never_used_by_startup(self):
         r = self.run_cli("--print")  # HOME is a tempdir: no real config touched
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("/dev/null", r.stdout)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("--default-config", r.stderr)
         self.assertEqual(os.listdir(self.dir), [])
         manifest = tomllib.loads((ROOT / "herdr-plugin.toml").read_text())
         commands = [manifest["startup"][0]["command"]] + [a["command"] for a in manifest["actions"]]
