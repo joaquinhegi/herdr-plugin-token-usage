@@ -15,7 +15,7 @@ Chained PRs recommended: Yes
 Chain strategy: stacked-to-main
 400-line budget risk: Medium
 
-Delivery: auto-chain; one branch + PR per slice against protected `main`, squash merge, in order. Total ~1,180. Slice 2 split (design ~380). PR #1 (platforms linux/macos) must merge before 2b manifest. STRICT TDD: RED then GREEN. Runner: `python3 -m unittest discover`.
+Delivery: auto-chain; one branch + PR per slice against protected `main`, squash merge. Execution order (user-approved): 1 → 3 → 2a → 2b → 4, so the Windows CI job exercises 2a/2b before review. Total ~1,180. Slice 2 split (design ~380). PR #1 (platforms linux/macos) must merge before 2b manifest. STRICT TDD: RED then GREEN. Runner: `python3 -m unittest discover`.
 
 ### Suggested Work Units
 
