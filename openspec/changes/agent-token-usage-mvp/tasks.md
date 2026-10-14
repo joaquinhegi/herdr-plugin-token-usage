@@ -67,8 +67,9 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 4b: TickService (PR4b)
 
-- [ ] 4.3 RED `tests/scenarios/test_tick.py` (spec cases 1-12): two sessions, resume after restart, corrupt A / valid B, Herdr unreachable skips clears, Codex ignored.
-- [ ] 4.4 GREEN `app/tick.py` (per-session try/except); REFACTOR.
+- [x] 4.3 RED `tests/scenarios/test_tick.py` (spec cases 1-12): two sessions, resume after restart, corrupt A / valid B, Herdr unreachable skips clears, Codex ignored.
+- [x] 4.4 GREEN `app/tick.py` (per-session try/except); REFACTOR.
+- [x] 4.5 Carry-overs from 4a verify: W1 negative age counts as stale (reconcile); W2 subagents are read next to the resolved main (locator test); 4.1 wording fixed (closed panes are forgotten).
 
 ## Slice 5: Lifecycle (PR5)
 
