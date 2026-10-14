@@ -18,12 +18,13 @@ class TickService:
         self.herdr, self.locator, self.tailer = herdr, locator, tailer
         self.store, self.clock, self.logger = store, clock, logger
 
-    def tick(self) -> None:
+    def tick(self) -> bool:
+        """Run one tick; False when Herdr was unreachable."""
         try:
             panes = self.herdr.list_panes()
         except Exception as exc:  # Herdr down: change nothing, clear nothing
             log_exception(self.logger, "herdr_unreachable", exc)
-            return
+            return False
         now = self.clock.now()
         pane_session = {
             p["pane_id"]: claude_session_id(p) for p in panes if isinstance(p, dict) and isinstance(p.get("pane_id"), str)
@@ -52,6 +53,7 @@ class TickService:
         except Exception as exc:  # next tick recomputes from the stored state
             log_exception(self.logger, "save_published_failed", exc)
         log_event(self.logger, "tick", panes=len(pane_session), actions=len(actions))
+        return True
 
     def _session_total(self, sid: str, now: float) -> int | None:
         """Total for a session, or None when unknown. Never raises."""
