@@ -1,4 +1,4 @@
-"""Detached poller lifecycle: flock guard, pidfile, spawn, signals, cleanup.
+"""Detached poller lifecycle (OS primitives live behind a host port): flock guard, pidfile, spawn, signals, cleanup.
 
 Kill-target identity: the poller holds an exclusive flock on poller.lock for life and,
 right after acquiring it, writes its own pid INTO the lock file. Probes that win the lock
@@ -9,12 +9,9 @@ a probe or a not-yet-registered poller holding the lock is therefore never mista
 daemon. A poller that collides with a probe retries the lock for ~1 s instead of exiting.
 """
 
-import fcntl
 import json
 import os
-import signal
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -24,8 +21,9 @@ from pathlib import Path
 from token_usage.adapters.log import log_event, log_exception
 from token_usage.app.tick import SOURCE, TOKEN
 from token_usage.domain.reconcile import Clear, reconcile
+from token_usage.lifecycle.host_posix import LOCK as HOST_LOCK, PosixHost
 
-LOCK = "poller.lock"
+LOCK = HOST_LOCK
 PID = "poller.pid"
 INTERVAL_S = 4.0
 ORPHAN_S = 300.0
@@ -35,32 +33,8 @@ LOCK_TRIES = 10   # run() lock attempts, 0.1 s apart (closes the probe-collision
 WAIT_S = 8.0      # handoff wait: CLEANUP_S + one worst-case herdr call (4 s) + margin
 
 
-def _try_lock(state_dir: Path) -> int | None:
-    """Return a locked fd, or None when another process holds the lock."""
-    state_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(state_dir / LOCK, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        os.close(fd)
-        return None
-    return fd
-
-
-def is_running(state_dir: Path) -> bool:
-    fd = _try_lock(Path(state_dir))
-    if fd is None:
-        return True
-    os.ftruncate(fd, 0)  # we hold the lock, so no poller lives: drop any stale pid
-    os.close(fd)
-    return False
-
-
-def _lock_pid(state_dir: Path):
-    try:
-        return int((Path(state_dir) / LOCK).read_text().strip())
-    except (OSError, ValueError):
-        return None
+def is_running(state_dir: Path, host=None) -> bool:
+    return (host or PosixHost()).held(Path(state_dir))
 
 
 def read_pidfile(state_dir: Path) -> dict:
@@ -85,13 +59,14 @@ def _write_pidfile(state_dir: Path, info: dict) -> None:
 class Poller:
     def __init__(self, state_dir, socket_path, tick, herdr, store, clock, logger,
                  sleep=None, interval=INTERVAL_S, orphan_after=ORPHAN_S,
-                 lock_sleep=time.sleep, mono=time.monotonic):
+                 lock_sleep=time.sleep, mono=time.monotonic, host=None):
         self.dir, self.socket_path = Path(state_dir), socket_path
         self.tick, self.herdr, self.store, self.clock, self.logger = tick, herdr, store, clock, logger
         self._stop = threading.Event()
         self._sleep = sleep or self._stop.wait
         self.interval, self.orphan_after = interval, orphan_after
         self._lock_sleep, self._mono = lock_sleep, mono
+        self.host = host or PosixHost()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -100,29 +75,25 @@ class Poller:
         return self._stop.is_set()
 
     def install_signals(self) -> None:
-        signal.signal(signal.SIGTERM, lambda *_: self.request_stop())
-        signal.signal(signal.SIGINT, lambda *_: self.request_stop())
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        self.host.install_signal_handlers(self.request_stop)
 
     def run(self) -> int:
-        fd = _try_lock(self.dir)
+        fd = self.host.acquire_lock(self.dir)
         for _ in range(LOCK_TRIES):
             if fd is not None:
                 break
             self._lock_sleep(0.1)  # a probe may hold the lock briefly
-            fd = _try_lock(self.dir)
+            fd = self.host.acquire_lock(self.dir)
         if fd is None:
             return 0  # another poller owns the lock
-        os.ftruncate(fd, 0)
-        os.write(fd, str(os.getpid()).encode())
+        self.host.record_identity(fd, os.getpid())
         info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
         try:
             _write_pidfile(self.dir, info)
             self._loop(info)
         finally:
             self._cleanup()
-            os.ftruncate(fd, 0)
-            os.close(fd)
+            self.host.release(fd)
         return 0
 
     def _loop(self, info: dict) -> None:
@@ -173,48 +144,50 @@ class Poller:
         (self.dir / PID).unlink(missing_ok=True)
 
 
-def _wait_free(state_dir, sleep, clock, wait) -> bool:
+def _wait_free(state_dir, sleep, clock, wait, host) -> bool:
     deadline = clock() + wait
     while clock() < deadline:
-        if not is_running(state_dir):
+        if not host.held(state_dir):
             return True
         sleep(1.0)
-    return not is_running(state_dir)
+    return not host.held(state_dir)
 
 
-def _terminate(state_dir, kill, sleep, clock, wait) -> bool:
+def _verified_pid(state_dir, host):
     pid = read_pidfile(state_dir).get("pid")
-    if isinstance(pid, int) and pid > 1 and pid == _lock_pid(state_dir) and pid != os.getpid():
-        try:
-            kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    return _wait_free(state_dir, sleep, clock, wait)
+    if isinstance(pid, int) and pid > 1 and pid == host.holder_pid(state_dir) and pid != os.getpid():
+        return pid
+    return None
+
+
+def _terminate(state_dir, sleep, clock, wait, host) -> bool:
+    host.request_stop(state_dir, _verified_pid(state_dir, host))
+    return _wait_free(state_dir, sleep, clock, wait, host)
 
 
 def start(state_dir, socket_path, main_path, popen=subprocess.Popen, kill=os.kill,
-          sleep=time.sleep, clock=time.monotonic, wait=WAIT_S) -> str:
-    state_dir = Path(state_dir)
+          sleep=time.sleep, clock=time.monotonic, wait=WAIT_S, host=None) -> str:
+    state_dir, host = Path(state_dir), host or PosixHost(popen=popen, kill=kill)
     result = "started"
-    if is_running(state_dir):
+    if host.held(state_dir):
         if read_pidfile(state_dir).get("socket_path") == socket_path:
             return "running"
-        if not _terminate(state_dir, kill, sleep, clock, wait):
+        if not _terminate(state_dir, sleep, clock, wait, host):
             return "failed"
         result = "restarted"
-    popen([sys.executable, "-B", str(main_path), "run"], start_new_session=True, close_fds=True,
-          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    host.spawn([str(main_path), "run"])
     return result
 
 
-def stop(state_dir, kill=os.kill, sleep=time.sleep, clock=time.monotonic, wait=WAIT_S) -> str:
-    if not is_running(Path(state_dir)):
+def stop(state_dir, kill=os.kill, sleep=time.sleep, clock=time.monotonic, wait=WAIT_S, host=None) -> str:
+    state_dir, host = Path(state_dir), host or PosixHost(kill=kill)
+    if not host.held(state_dir):
         return "stopped"
-    return "stopped" if _terminate(Path(state_dir), kill, sleep, clock, wait) else "failed"
+    return "stopped" if _terminate(state_dir, sleep, clock, wait, host) else "failed"
 
 
-def status(state_dir, store) -> str:
-    if not is_running(Path(state_dir)):
+def status(state_dir, store, host=None) -> str:
+    if not (host or PosixHost()).held(Path(state_dir)):
         return "stopped"
     info = read_pidfile(state_dir)
     tick = info.get("last_tick")
