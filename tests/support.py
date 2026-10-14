@@ -26,8 +26,9 @@ needs_symlink = unittest.skipUnless(_can_symlink(), "symlinks unavailable")
 def child_env(**extra) -> dict:
     """Minimal environment for a child Python; Windows needs SYSTEMROOT to start."""
     env = {"PATH": os.environ.get("PATH", "")}
-    if os.environ.get("SYSTEMROOT"):
-        env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    for name in ("SYSTEMROOT", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"):  # Windows profile and temp dirs
+        if os.environ.get(name):
+            env[name] = os.environ[name]
     env.update(extra)
     if "HOME" in extra:
         env.setdefault("USERPROFILE", extra["HOME"])  # Path.home() on Windows

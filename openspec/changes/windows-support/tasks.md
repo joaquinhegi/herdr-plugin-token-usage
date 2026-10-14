@@ -39,10 +39,11 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 2a: WindowsHost (PR2a)
 
-- [ ] 2.1 RED (nt only) `test_host_windows.py`: second lock fails; crashed holder frees; pid at offset 16 readable; liveness never `os.kill`.
-- [ ] 2.2 GREEN `host_windows.py` lock, identity, `held`, `holder_pid`, `release`, spawn flags.
-- [ ] 2.3 RED FakeHost: stop creates `poller.stop`; stale file removed at startup/exit; `status` prints `stopping pid=…`.
-- [ ] 2.4 GREEN `daemon.py` stop flow, `Poller.is_stopping`, `_wait` slices, `stopping` status; signal handlers INT/BREAK.
+- [x] 2.1 RED (nt only) `test_host_windows.py`: second lock fails; crashed holder frees; pid at offset 16 readable; liveness never `os.kill`.
+- [x] 2.2 GREEN `host_windows.py` lock, identity, `held`, `holder_pid`, `release`, spawn flags.
+- [x] 2.3 RED FakeHost: stop creates `poller.stop`; stale file removed at startup/exit; `status` prints `stopping pid=…`.
+- [x] 2.4 GREEN `daemon.py` stop flow, `Poller.is_stopping`, `_wait` slices, `stopping` status; signal handlers INT/BREAK.
+- [x] 2.4a Carry-overs: FakeHost stop-file mode + wait>0 fake-clock tests (kills D3); `child_env` forwards APPDATA/LOCALAPPDATA/TEMP/TMP; `TestRun`, `TestRunHardening`, `TestStatus` unskipped on Windows via host-agnostic `hold_lock`. Still POSIX-only in test_daemon: `TestStart` (PosixHost popen/kill/SIGTERM) and `TestRealSpawn` (2b).
 
 ## Slice 2b: Terminate + manifest (PR2b)
 
