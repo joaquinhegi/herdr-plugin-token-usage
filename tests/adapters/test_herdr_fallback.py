@@ -22,6 +22,16 @@ class FallbackTest(unittest.TestCase):
         self.logger = logging.getLogger("fallback_test")
         self.logger.handlers[:] = []
 
+    def test_attribute_error_from_missing_transport_falls_back_to_cli(self):
+        class NoSocket:
+            def list_panes(self):
+                raise AttributeError("module 'socket' has no attribute 'AF_UNIX'")
+
+        fb = FallbackHerdr(NoSocket(), self.cli, self.logger)
+        with self.assertLogs(self.logger, "INFO") as cm:
+            self.assertEqual(fb.list_panes(), fixture_panes())
+        self.assertEqual(cm.records[0].getMessage().count("AttributeError"), 1)
+
     def test_socket_failure_falls_back_per_call_and_retries_socket(self):
         calls = []
 
