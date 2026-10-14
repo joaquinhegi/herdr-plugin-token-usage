@@ -599,3 +599,72 @@ Survived: M1 isabs, M6 CLI default 30 s, M7 no `_check` in `clear`, M8 size cap,
 ### Verdict
 PASS WITH WARNINGS
 88/88 tests pass and the build is clean. The argv threat rows are implemented (no shell, literal metacharacters, absolute executable bin, validated IDs, timeout), and the per-call fallback with privacy-safe logging is verified. Five warnings remain: test isolation, and the focused command failing because of it; non-discriminating tests for isabs, the default timeouts and the size cap; no value validation and the `ValueError` leak; the per-recv rather than per-call socket timeout; and the spec wording for socket publish.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:54484197c5678d4199e33979e040f509e56c891b345a11482ec680ec7f482857
+verdict: pass
+blockers: 0
+critical_findings: 0
+requirements: 2/2
+scenarios: 1/1
+test_command: python3 -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:a2a2d4c5370444daca71c724f60570d0f37be0a7ca0bd73f3a57289635f6c372
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Slice 3b Re-verification (bounded correction b456422)
+
+**Change**: agent-token-usage-mvp
+**Mode**: Strict TDD
+**Candidate**: branch `slice-3b-herdr`, HEAD `b456422` (tree `6ad561d`), on `887472f`. Diff `git diff 887472f b456422`: 6 files, +90/-16 (`herdr_cli.py`, `herdr_socket.py`, three `test_herdr_*.py`, `specs/sidebar-metadata/spec.md`).
+**Scope**: Confirms the prior slice-3b findings (W1-W5) and looks only for regressions introduced by the correction. This is not a fresh full-slice audit. Under the single-correction rule, new non-critical observations are carry-overs. Envelope counts are unchanged from the slice-3b section: 2 requirements (Publish and clear, transport part; Least privilege, subprocess and logging clauses) and 1 scenario (Herdr unreachable, adapter-level part).
+**Evidence revision**: sha256 over `tree:6ad561d2e718a9cb104ce5d859f1855a5d2a1458\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`. The test output contains a wall-clock duration, so its hash is specific to this run.
+**Safety**: The real `herdr` binary and the real socket were never used. Tests use a fake bin and an AF_UNIX fake server. Commands and mutations ran in a `git archive b456422` scratch copy with `python3 -B` and no `__pycache__`. The repository was not modified.
+
+### Build & Tests
+- Tests: `python3 -m unittest discover` exited 0. It ran 94 tests, all OK (88 prior plus 6 new: 3 CLI, 3 socket). The same command in the repository with `-B` also gives 94 OK.
+- Standalone: `python3 -m unittest tests.adapters.test_herdr_cli` gives 11 OK, `tests.adapters.test_herdr_socket` gives 10 OK, and `tests.adapters.test_herdr_fallback` gives 2 OK.
+- Focused command from tasks.md work unit 3, `python3 -m unittest discover -s tests/adapters -p "test_herdr*"`, now gives 23 OK. Before the correction it failed with `ModuleNotFoundError`.
+- Build: `python3 -m compileall -q src tests` exited 0 with empty output.
+- Coverage: skipped because no coverage tool is installed.
+
+### Prior Findings
+| Finding | Status | Evidence |
+|---|---|---|
+| W1: test imports not standalone | RESOLVED | `sys.path.insert(0, .../src)` at `test_herdr_cli.py:9`, `test_herdr_socket.py:7`, `test_herdr_fallback.py:9`. All three modules and the focused discover command pass on their own (see Build & Tests). |
+| W2: guards without discriminating tests | RESOLVED | Mutations in the scratch copy: M1 (`isabs` removed, `herdr_cli.py:38`) is KILLED by `test_relative_bin_rejected` (:24). That test now chdirs into a directory that holds an executable `herdr` and asserts it exists, so only `isabs` can reject the call. M6 (CLI default 30 s, `:37`) is KILLED by `test_default_timeout_is_2` (:33). M11 (socket default `None`, `herdr_socket.py:19`) is KILLED by `test_herdr_socket.py:53` (plus 7 TypeErrors, see S2). M8 (size cap disabled, `herdr_socket.py:35`) is KILLED by `test_oversized_with_newline` (:47), whose 9 KB reply ends in a newline. M7 (`_check` removed from `clear`, `herdr_cli.py:71`) is KILLED by `test_clear_invalid_ids_rejected_before_spawn` (:36). |
+| W3: value/seq/ttl validation and ValueError leak | RESOLVED | `report` checks `value` before spawn: it must be a str of 1-80 chars and `isprintable()` (`herdr_cli.py:63-64`). `_int` (`:20-22`) rejects bool, non-int and negative values for `seq` and `ttl_ms` (`:65-66`) and for `clear` `seq` (`:72`). `_run` maps `ValueError` to `HerdrError` (`:49`). The test (`test_herdr_cli.py:43`) covers NUL, newline, empty, 81 chars, non-str, str seq, negative seq and ttl, bool seq and ttl, float ttl, and bad `clear` seq. It also asserts that nothing was spawned and that 80 chars with 0/0 is accepted. 11 of the 12 validation mutations are KILLED (each clause of the value check, each `_int` clause, each `_int` call site). Probes reject U+2028, TAB, a lone surrogate and ESC. `1.3k tokens`, `é 5`, `-x`, `--ttl-ms=1` and `a=b` still arrive as a single `usage=<value>` argv item. |
+| W4: per-recv rather than per-call socket timeout | RESOLVED | A monotonic deadline is set before connect (`herdr_socket.py:42`). Each recv uses the time left (`:27-30`) and raises `deadline_exceeded` when it runs out. Restoring the `887472f` socket module makes `test_slow_drip_hits_total_deadline` (:56) fail (`10.70 not less than 1.0`). Probe: a 1-byte-per-0.1 s drip with `timeout=0.2` now stops at 0.202 s (`TimeoutError`). Before the correction it stalled 1.56 s. |
+| W5: spec wording on publish via CLI | RESOLVED | `specs/sidebar-metadata/spec.md:17` now says reads (`pane list`) go through the socket with CLI fallback, and metadata writes go through `herdr pane report-metadata` until socket `report_metadata` is verified, citing design.md Open Questions (`design.md:111`). This matches `herdr_fallback.py:24-28` and `herdr_socket.py:53-56`. |
+
+### Mutation Summary (scratch copy, `python3 -B`, per test module)
+Killed (18): M1, M6, M7, M8, M11, W3a-W3k (11 validation mutations), the W4 full revert (the `887472f` socket module), and W4a+W4b combined (slow-drip test fails at 10.9 s).
+Survived (3, all equivalent or unreachable):
+- W3l: `_run` catching `UnicodeDecodeError` instead of `ValueError`. Every argv value is now validated before spawn, so no test can reach a `ValueError` from `subprocess.run`. The `:49` catch is defense in depth. `UnicodeDecodeError` is a `ValueError` subclass, so it is still covered.
+- W4a: `settimeout(self._timeout)` with the deadline check kept. This is equivalent within one recv timeout, because the deadline check still ends the loop.
+- W4b: deadline check removed. This is equivalent because `settimeout` with a negative value raises `ValueError`, which maps to `HerdrError`.
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**: None. The prior W1-W5 are resolved, and the correction introduced no new warning.
+
+**SUGGESTION** (new, from the correction; carry-over under the single-correction rule):
+1. (S1) `connect` and `sendall` still use the full `self._timeout` (`herdr_socket.py:44-46`), not the time left. The worst case is about 2x the timeout before `_read_line` raises `deadline_exceeded`. In practice an AF_UNIX connect plus a 60-byte send does not block. Calling `sock.settimeout(max(0, deadline - time.monotonic()))` before `sendall` would make the bound exact.
+2. (S2) `HerdrSocket(path, timeout=None)` now raises an uncaught `TypeError` (`time.monotonic() + None`, `herdr_socket.py:42`), which `FallbackHerdr` does not catch. Before the correction, `None` meant blocking. Nothing in `src/` passes `None`, and the signature declares `float`. Slice 4 wiring should keep the default or reject non-positive or `None` timeouts in `__init__`. This is related to the open carry-over `HerdrSocket(None)` path `TypeError`.
+3. (S3) `test_slow_drip_hits_total_deadline` asserts a wall-clock bound below 1.0 s (5x the 0.2 s timeout). The margin is generous, but on an overloaded CI runner it could flake. A looser bound (for example 2.0 s against the 10 s drip) would still discriminate.
+4. (S4) The "Herdr unreachable" scenario (`spec.md:29-33`) still reads "WHEN publishing THEN the CLI fallback is tried". With writes CLI-only, that is true but trivially so. The covering test is the `list_panes` fallback. Consider rewording it to "WHEN listing panes or publishing".
+5. `ttl_ms`/`seq` have no upper bound (`10**30` is accepted). This is harmless because it is a single argv item.
+
+**Carry-overs still open from the slice-3b section**: `HerdrSocket(None)` path `TypeError`; no test where a socket exists and `report`/`clear` still go to the CLI (M15); no stdout size cap on CLI `list_panes`; the error-reply test and the fallback log line are not pinned (M10, M12). No `stdin=DEVNULL` test (M16).
+
+### Regressions Introduced by the Correction
+None that block. The widened `except` in `_run` (`ValueError` instead of `UnicodeDecodeError`) is a superset of the old catch. `list_panes` still maps JSON errors to `invalid_json`. The new socket deadline keeps the existing error mapping (`HerdrError` reason tokens; `OSError`/`ValueError` mapped to their type names). The only behavior change found is S2 (`timeout=None`), which is outside the declared type and has no caller. `test_relative_bin_rejected` changes the process cwd. Its cleanups run LIFO (chdir back, then rmtree), so later tests are not affected, and the full suite passes in any of the runs above.
+
+### Verdict
+PASS
+W1-W5 are resolved with runtime and mutation evidence. 94/94 tests pass, each Herdr test module passes on its own, the focused work-unit command passes, and the build is clean. There are no CRITICAL or WARNING issues. Four new non-blocking suggestions (S1-S4) and the open slice-3b suggestions remain carry-overs under the single-correction rule. The slice-3a carry-over WARNING (deduplicate resolved subagent paths) is outside this slice and is still open for slice 4.
