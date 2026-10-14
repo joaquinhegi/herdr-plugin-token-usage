@@ -7,18 +7,24 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from token_usage.domain.mapping import SUBAGENT_NAME
+
 VERSION = 1
 MAX_AGE = 30 * 86400
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
-_FILE_KEY = re.compile(r"^(main|subagents/agent-[A-Za-z0-9_.-]+\.jsonl)$")
 TMP_MAX_AGE = 3600
+
+
+def file_key_allowed(key: str) -> bool:
+    name = key[len("subagents/"):] if key.startswith("subagents/") else None
+    return key == "main" or (name is not None and SUBAGENT_NAME.fullmatch(name) is not None and ".." not in name)
 
 
 def _check_state(state: dict[str, Any]) -> None:
     for key in state.get("files", {}):
-        if not _FILE_KEY.fullmatch(key) or ".." in key:
+        if not file_key_allowed(key):
             raise ValueError("file key not allowed")
 
 

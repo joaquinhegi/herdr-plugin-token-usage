@@ -6,11 +6,16 @@ from token_usage.adapters.log import log_event, log_exception
 from token_usage.domain.ledger import Ledger
 from token_usage.domain.mapping import claude_session_id
 from token_usage.domain.reconcile import TTL_MS, Clear, reconcile
+from token_usage.adapters.state_store import file_key_allowed
 from token_usage.ports import HerdrPort, StateStore, Tailer
 from token_usage.sources import claude
 
 SOURCE = "token-usage"
 TOKEN = "tokens"
+
+
+class _StopRequested(Exception):
+    """Private stop signal: never confused with an InterruptedError raised by Herdr."""
 
 
 class TickService:
@@ -46,13 +51,13 @@ class TickService:
         for action in actions:
             try:
                 if self.should_stop():
-                    raise InterruptedError("stop requested")  # left unapplied, retried by the next run
+                    raise _StopRequested()  # left unapplied, retried by the next run
                 if isinstance(action, Clear):
                     self.herdr.clear(action.pane_id, SOURCE, TOKEN, action.seq)
                 else:
                     self.herdr.report(action.pane_id, SOURCE, TOKEN, action.value, action.seq, TTL_MS)
             except Exception as exc:  # unapplied: keep the old record so the next tick retries
-                if not isinstance(exc, InterruptedError):
+                if not isinstance(exc, _StopRequested):
                     log_exception(self.logger, "apply_failed", exc)
                 if action.pane_id in old:
                     state["panes"][action.pane_id] = old[action.pane_id]
@@ -84,6 +89,7 @@ class TickService:
         files = {k: dict(v) for k, v in saved.get("files", {}).items()}
         paths = {"main": located.main}
         paths.update({f"subagents/{p.name}": p for p in located.subagents})
+        files = {k: v for k, v in files.items() if k in paths and file_key_allowed(k)}  # drop stale or bad keys
         dirty = False
         for key, path in paths.items():
             result = self.tailer.read(path, files.get(key))

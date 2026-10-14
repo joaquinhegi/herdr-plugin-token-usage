@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from token_usage.adapters.log import log_event
-from token_usage.domain.mapping import UUID
+from token_usage.domain.mapping import SUBAGENT_NAME, UUID
 
 
 MAX_REMEMBERED = 1024
@@ -57,7 +57,7 @@ class ClaudeLocator:
         if sub_dir.is_dir():
             for f in sorted(sub_dir.glob("agent-*.jsonl")):
                 real = self._resolve(f, root_real)
-                if real and real.match("agent-*.jsonl") and real.parent.name == "subagents" and real.parent.parent.name == session_id:
+                if real and SUBAGENT_NAME.fullmatch(real.name) and real.parent.name == "subagents" and real.parent.parent.name == session_id:
                     if real not in subs:
                         subs.append(real)
         return Located(main, subs)

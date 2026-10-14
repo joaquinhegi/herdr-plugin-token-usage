@@ -249,6 +249,36 @@ class TickTest(unittest.TestCase):
         self.herdr.fail_list = True
         self.assertFalse(self.svc.tick())
 
+    def test_disallowed_subagent_name_is_ignored_and_session_still_saves(self):
+        self.write(A, line("m1", 1200))
+        self.write_sub(A, "agent-a b.jsonl", line("s1", 500))
+        self.herdr.panes = [claude_pane("p1", A)]
+        self.svc.tick()
+        self.assertEqual(self.take(), [("report", "p1", SOURCE, TOKEN, "1.2k tokens", 60000)])
+        self.assertEqual(list(StateStore(self.base / "state").load_session(A)["files"]), ["main"])
+
+    def test_old_disallowed_file_key_is_dropped_and_session_saves(self):
+        self.write(A, line("m1", 1200))
+        self.herdr.panes = [claude_pane("p1", A)]
+        store = StateStore(self.base / "state")
+        path = store._session_path(A)
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"v": 1, "last_seen": 1.0, "ledger": {}, "aliases": {},
+                                    "files": {"subagents/agent-a b.jsonl": {"offset": 1}, "subagents/agent-gone.jsonl": {"offset": 1}}}))
+        self.svc.tick()
+        self.assertEqual(list(store.load_session(A)["files"]), ["main"])
+
+    def test_real_interrupted_error_from_herdr_is_a_publish_failure_not_stop(self):
+        self.write(A, line("m1", 1200))
+        self.herdr.panes = [claude_pane("p1", A)]
+
+        def boom(*a):
+            raise InterruptedError("EINTR")
+
+        self.herdr.report = boom
+        self.svc.tick()
+        self.assertIn("apply_failed error=InterruptedError", self.log_text())
+
     def test_save_failures_do_not_escape_tick(self):
         """plugin-lifecycle: store failures are contained."""
         self.write(A, line("m1", 1200))
