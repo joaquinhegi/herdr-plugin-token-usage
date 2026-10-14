@@ -668,3 +668,119 @@ None that block. The widened `except` in `_run` (`ValueError` instead of `Unicod
 ### Verdict
 PASS
 W1-W5 are resolved with runtime and mutation evidence. 94/94 tests pass, each Herdr test module passes on its own, the focused work-unit command passes, and the build is clean. There are no CRITICAL or WARNING issues. Four new non-blocking suggestions (S1-S4) and the open slice-3b suggestions remain carry-overs under the single-correction rule. The slice-3a carry-over WARNING (deduplicate resolved subagent paths) is outside this slice and is still open for slice 4.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:118e19834af7e45c055c6a09d1b28a97822b536577e2f227a7faa300957e2137
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 5/5
+scenarios: 6/6
+test_command: python3 -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:945ed340975f08239b745d3d9c2bd09ec049b738f0b7868ec7abf7c2c2f05699
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 4a (tasks 4.0a, 4.0b, 4.1, 4.2, reconcile and carry-overs)
+
+**Change**: agent-token-usage-mvp
+**Mode**: Strict TDD
+**Candidate**: branch `slice-4a-reconcile`, HEAD `9a060b5` (tree `3d90a90`), commits `55e8ed1` (locator dedupe), `23d6d8c` (tailer first newline), `9a060b5` (reconcile). Diff `git diff slice-3b-herdr slice-4a-reconcile`: 7 files, +202/-12.
+**Evidence revision**: sha256 over `tree:3d90a903e73f2b1a2bba6d6f7059b653e47484bc\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`.
+**Scope**: Slice-scoped. There are 5 requirements, each for the part this slice owns: Publish and clear (sidebar-metadata, reconcile decisions), Strict Claude resolution (session-mapping, subagent dedupe), No reliable session, no figure (session-mapping, clear and never 0), Session change and resume (session-mapping, clear or replace on a new id), and Incremental tail (usage-accounting, per-tick bound). There are 6 scenarios: Unchanged value, Pane closed, Subagents included, Missing file, New session in same pane, Growing file. End-to-end tick behavior (Herdr unreachable skips clears, persistence order) belongs to slice 4b (tasks 4.3-4.4).
+**Safety**: herdr and real sockets were never used, and there was no network access. Mutations, probes and the RED replay ran only in `git archive` copies in the scratchpad, with `python3 -B`. Note: the first `compileall` run went to the repository and refreshed the gitignored `__pycache__` files there (for example `src/token_usage/domain/__pycache__/reconcile.cpython-314.pyc`). No tracked file changed, and `git status --porcelain` is empty.
+
+### Completeness
+| Metric | Value |
+|---|---|
+| Slice 4a tasks | 4 (4.0a, 4.0b, 4.1, 4.2) |
+| Complete | 4 (`tasks.md`: Slice 4a, all `[x]`) |
+| Incomplete | 0. Slice 4b tasks 4.3 and 4.4 are out of scope. |
+
+### Build & Tests
+- Tests: `python3 -m unittest discover` exited 0 and ran 111 tests, all OK. That is 94 earlier tests plus 15 reconcile tests and 2 locator tests. The tailer test was replaced, not added.
+- Build: `python3 -m compileall -q src tests` exited 0 with empty output.
+- Coverage: skipped because no coverage tool is installed.
+
+### Spec Compliance Matrix
+| Requirement | Scenario (slice part) | Test | Result |
+|---|---|---|---|
+| Publish and clear (RF04, C11) | Unchanged value: no redundant publish within TTL, refresh after it | `test_reconcile > test_unchanged_recent_value_emits_nothing`, `test_refresh_at_exactly_20s_but_not_before` | COMPLIANT (mutations R1 and R3 killed) |
+| Publish and clear (RF04, C11) | Pane closed: A dropped, B unaffected | `test_reconcile > test_absent_pane_is_forgotten_without_action`; per-pane independence in `test_seq_strictly_increases_within_one_call` | COMPLIANT at unit level (R9 killed). No single test has A absent and B present (S4). |
+| Strict Claude resolution (RF01, C1, C2) | Subagents included, once each, never another session's | `test_claude_locator > test_duplicate_subagent_symlink_in_same_dir_yields_one`, `test_project_dir_alias_to_same_file_is_not_ambiguous`, and the earlier attribution tests (:48, :86, :92, :101) | COMPLIANT (L2, L3 and L4 killed) |
+| No reliable session, no figure (C10) | Missing file: cleared, never `0` | `test_reconcile > test_none_clears_previously_published_and_forgets`, `test_zero_total_clears_and_never_publishes_zero`, `test_unmapped_never_published_emits_nothing` | COMPLIANT (R4 and R5 killed) |
+| Session change and resume (RF01, C4, C5) | New session in same pane: A's value replaced or cleared | `test_reconcile > test_session_change_same_value_publishes`; probe: a change to an empty B or to None emits `Clear` | COMPLIANT (R2 killed) |
+| Incremental tail (RF03, C9) | Growing file: complete lines only, no loss, bounded per tick | `test_jsonl_tail > test_line_larger_than_read_cap_is_consumed_through_first_newline_only` and the earlier tail tests | COMPLIANT (T1 killed) |
+
+### Correctness (Static + Probe Evidence)
+| Area | Status | Notes |
+|---|---|---|
+| Publish on value or session change | OK | `reconcile.py:45-50` publishes unless the session and formatted value match and the age is < 20 s. Totals that format the same (1250 and 1260 are both `1.3k tokens`) do not republish, which matches "publish only when the value changes". |
+| Refresh at >= 20 s | OK with a gap | `reconcile.py:46` uses `now - at < REFRESH_S`, so the boundary is exact (19.9 s keeps, 20 s refreshes). A negative age counts as fresh (W1). |
+| Clear only if previously published | OK | `reconcile.py:40-43`. None or total <= 0 gives `Clear` only when `prev` exists, and the pane is never put into the new state. `0 tokens` cannot be produced, because `format_tokens` is only reached when total > 0. |
+| Session changes to unmapped or None | OK | Probe: prev `{session: A}` with desired `(B, 0)` gives `[Clear]`, and with desired `None` gives `[Clear]`. With `(B, n > 0)` it gives `Publish`, which replaces A's value. |
+| Absent panes forgotten | OK | The loop runs only over `desired` (`:37`). Absent panes produce no action and are left out of the new state. |
+| seq | OK | `next_seq` (`:31-34`) is `max(last + 1, now_ms)` for each action. It strictly increases within a call (+1 per action) and stays monotonic when the clock goes backwards (prev seq NOW_MS+500 gives NOW_MS+501). It is unchanged when there are no actions. Missing seq defaults to 0. |
+| previous not mutated | OK | Kept entries are copied (`dict(prev)`, `:48`), and `old` is only read. Mutations R11a and R11b (pop from previous, write seq back) were killed. A mutation of a prev entry on the publish path (R11c) survived (S1). |
+| Published-state schema | Faithful | Reconcile returns `{"seq", "panes": {id: {"session", "value", "at"}}}`. `StateStore._write` adds `"v": 1` (`state_store.py:27`), and `_read` rejects other versions (`:49`). Probe: a previous state that includes `v` is accepted, and `v` is dropped from the result. This matches design.md:66-67 once persisted. |
+| Locator, subagent dir from the resolved main | Safe | `claude_locator.py:43-46`: `main` is a realpath inside `root_real` with basename `<uuid>.jsonl`, so `main.parent` is inside the root. Each subagent is resolved again (`:49`), checked against the root, and must sit under `<session_id>/subagents/agent-*.jsonl` (`:50`). It cannot escape the root or pull subagents named for another session (L4 killed; `test_in_root_subagent_symlink_to_other_session_is_dropped` and `test_escaping_subagent_symlink_is_dropped_only` still pass). Probe: when a main symlink points to another in-root project, subagents come from the target project, and stale files under the alias project are ignored. That choice has no discriminating test (W2). |
+| Locator dedupe | OK | Mains are keyed by resolved path (`:39`), so an alias is not ambiguous. Two distinct real files are still ambiguous (`test_ambiguous_across_projects_is_none_with_one_line`; L3 key-by-project killed). Subagents are deduped by resolved path (`:51`; L2 killed). |
+| Tailer per-tick bound | OK | `jsonl_tail.py:50` `find` consumes only the first completed line after the `max_fragment + 1` window. Default-cap probe with a 10 MiB line followed by 40,000 lines of about 1 KiB: tick 0 gives 1 object and consumes 10.00 MiB; ticks 1 and 2 consume 4.00 MiB each; 40,001 of 40,001 objects arrive in 12 ticks, and the final offset equals the file size. That fixes the slice-2 WARNING 1. Tick 0 peaks at 46.1 MiB, which is the existing slice-2 S8 and is not new. |
+| Replaced tail test proves no loss | OK | It asserts 1 object, `offset == len(big)`, and then `r2.objects == [{"a": 2}]`. |
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|---|---|---|
+| Reconcile: publish on change, refresh at age >= 20 s (TTL 60 s), clear on None if previously published, forget absent panes (design.md:53) | Yes | `REFRESH_S=20`, `TTL_MS=60000` |
+| `--seq` = `max(last_seq + 1, time_ns // 1e6)`, persisted (design.md:37) | Yes | Callers pass `now_ms`. Persistence is the store's job (4b). |
+| Empty session: total 0 is cleared, never `0 tokens` (design.md:36) | Yes | |
+| published.json schema v1 (design.md:66-67) | Yes | The store owns `v` |
+| Tailer: <= 4 MiB per tick, fragments > 16 MiB skipped (design.md:57) | Yes | One oversized line (4-16 MiB) per tick is the design's own ceiling |
+
+### TDD Compliance
+| Check | Result | Details |
+|---|---|---|
+| TDD evidence reported | Yes | Engram #159, slice 4a table (4 rows) |
+| RED confirmed | Yes (replayed) | The slice-4a tests run over the `slice-3b-herdr` src gave `Ran 25`, `FAILED (failures=3, errors=1)`. The failures are the 2 new locator tests and the replaced tail test, and the error is the `test_reconcile` ImportError. This matches the reported RED exactly. |
+| GREEN confirmed | Yes | 111/111 |
+| Triangulation | Yes | Reconcile has 15 cases covering every rule plus the boundaries (19.9 s and 20 s, 0 and -5, clock backwards for seq) |
+| Safety net | Yes | The locator and tailer files were modified with their earlier tests kept. `reconcile.py` and `test_reconcile.py` are new. |
+
+### Test Layer Distribution
+| Layer | Tests | Files |
+|---|---|---|
+| Unit (pure) | 15 | `tests/unit/test_reconcile.py` |
+| Adapter (tempdir) | 3 changed or added | `test_claude_locator.py`, `test_jsonl_tail.py` |
+
+### Mutation Summary (scratch copy, `python3 -B`, per test module)
+Killed: R1 `<` to `<=`, R2 no session compare, R3 no value compare, R4 `<= 0` to `< 0`, R5 always clear, R6 seq = now_ms, R7 seq = last + 1, R8 keep cleared pane, R9 keep absent panes, R11a pop from previous, R11b write seq into previous, R12 `at` not refreshed, L2 no subagent dedupe, L3 key mains by project, L4 drop the subagent parent-name check, T1 `find` back to `rfind`.
+Survived: L1 `project = mains[main]` (the unresolved project dir; W2), R11c mutating a prev entry on the publish path (S1), R10 returning `prev` without a copy (aliasing only; S1), R13 unsorted iteration (equivalent for the test inputs; ordering is not a requirement).
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+1. (W1) A negative age suppresses the TTL refresh. `reconcile.py:45-46` keeps an entry whenever `now - at < 20`, and that includes `now < at`. Probe: with `at=2000` and `now` set to 1990, 1900 or 1000, the result is `[]`. `at` is persisted in published.json (design.md:67). After a backwards wall-clock step, or if 4b passes a monotonic clock that resets on reboot, no refresh is sent until `now >= at + 20`. Meanwhile the 60 s TTL expires in Herdr and the figure disappears for that long. seq handles the clock going backwards explicitly, but `at` does not. Fix: treat a negative age as stale (`not 0 <= now - at < REFRESH_S`) and add a test.
+2. (W2) The resolved-main subagent directory is untested. `claude_locator.py:44` (`project = main.parent`) is the key 4.0a decision, but mutation L1 (`project = mains[main]`, the first unresolved project dir) passes every test. Probe: when `-proj/<A>.jsonl` is a symlink to `-real/<A>.jsonl`, the code returns `-real/<A>/subagents/*` and ignores `-proj/<A>/subagents/*`. Under L1 the result is the reverse. Both stay attribution-safe because the session-id filter holds, but the chosen behavior is not covered by a test. Add a test with a main symlink to another in-root project that has subagents.
+
+**SUGGESTION**:
+1. `test_previous_state_is_not_mutated` covers only the Clear path. Also check the publish and refresh paths (R11c survived), and assert that the returned entries are not the objects in `previous` (R10).
+2. tasks.md 4.1 says "clear on None/close/session change". Closed panes are forgotten without a `Clear` (design.md:53), which is correct because the pane no longer exists. Align the task wording.
+3. For slice 4b: reconcile returns a state that assumes every action succeeded. TickService should persist the new published state only for actions that were applied, and must skip reconcile entirely when Herdr is unreachable (spec case "Herdr unreachable skips clears").
+4. Add an explicit Pane closed test with A absent and B present and unchanged, asserting that B produces no action and keeps its entry.
+5. Still open from slice 2 (S8): an oversized-line tick buffers up to 16 MiB + 1 (46.1 MiB peak measured with a 10 MiB line).
+
+### Prior Findings Addressed
+| Finding | Status |
+|---|---|
+| Slice-2 re-verify WARNING 1 (fragment branch consumed past the oversized line) | RESOLVED by 23d6d8c (probe above) |
+| Slice-3a re-verify WARNING 1 (duplicate subagent paths) | RESOLVED by 55e8ed1 |
+| Slice-3a S-b (an in-root alias made the result ambiguous) | RESOLVED by 55e8ed1 |
+
+### Verdict
+PASS WITH WARNINGS
+111/111 tests pass and the build is clean. All 4 slice-4a tasks are done, with RED replayed and matching the reported evidence. Reconcile implements publish on change, refresh at >= 20 s, clear only when previously published, never `0`, forgetting absent panes, and a monotonic seq. The locator dedupe stays inside the root and attribution-safe, and the tailer bound holds with no data loss. Two warnings remain: a negative age blocks the TTL refresh, and the resolved-main subagent directory has no discriminating test.
