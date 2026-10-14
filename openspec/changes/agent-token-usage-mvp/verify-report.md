@@ -1626,3 +1626,93 @@ build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca49599
 
 ### Verdict
 PASS WITH WARNINGS. All 6b carry-overs are resolved with runtime and mutation evidence, except the README.md:37 residual. The suite passes 195/195, and E2-grow (W-R1) no longer reproduces. One new low-likelihood regression from the file-key allowlist (W-6b-1) should be fixed or accepted before archive. 5.3a and 6.4 remain user-owned.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:6db5201b2c8166e26ea74b0bbb2b89f9d821cfa2a20b4d6651bcf2576e115d4b
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 7/7
+scenarios: 8/8
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:be8320a5b7671100c9f4f8feaf4ce1b1880efc57c1d1e8a7aaf5ef7b103f2a22
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report (slice 6b re-verification after one bounded correction)
+
+**Change**: agent-token-usage-mvp
+**Candidate**: `git diff 3732258 3e49814` on branch `slice-6b-hardening` (commits 3dabe15 and 3e49814; 8 files, +66/-10). `evidence_revision` is the SHA-256 of that diff.
+**Mode**: Strict TDD (`openspec/config.yaml:9`). This is a re-verification under the single-correction rule. It checks that the earlier findings are resolved and looks for regressions. New non-critical findings become carry-overs.
+**Method**: The tests, build, probes and mutants ran in a `git archive 3e49814` copy under the session scratchpad with Homebrew Python 3.14.8 (`python3 -B`). The repository was not modified (`git status --short` is empty). No real `~/.config/herdr`, `~/.claude/projects`, herdr binary, socket, network or plugin link/enable was used. The shell `stop` fallback ran under `env -i` with a temp HOME and a temp state dir. Final `pgrep -fl "src/main.py"`: no output (exit 1).
+**Scope of counts**: the same 7 requirements and 8 scenarios as the slice 6b report.
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Tasks complete | 40 of 42 |
+| Tasks incomplete | 2, both user-owned [APPROVAL]: 5.3a (tasks.md:79) and 6.4 (tasks.md:86) |
+
+### Build and tests
+- Tests: `python3 -B -m unittest discover` gives `Ran 199 tests ... OK` (exit 0). That is 195 plus 4 new tests, as expected.
+- Build: `python3 -B -m compileall -q src tests` exits 0 with empty output (scratch copy only).
+- Coverage: not available (stdlib only).
+
+### Finding resolution
+| Item | Status | Evidence |
+|---|---|---|
+| W-6b-1: allowlist vs. locator glob | PARTIAL | `mapping.py:6` defines `SUBAGENT_NAME`, which both `claude_locator.py:60` and `state_store.py:20-22` use. `tick.py:92` drops saved keys that are no longer located or not allowed. I re-ran the earlier probe with `max_read=300` and 12 ticks. **`agent-a b.jsonl`**: the subagent is skipped, the session saves with keys `["main"]`, and there are 0 `save_session_failed` lines. **Old state with a disallowed key and a gone key**: the total converges to "1.1k tokens", the keys become `[main, subagents/agent-ok1.jsonl]`, and there are 0 failures. **Remaining gap**: `state_store.py:22` also rejects names that contain `..`, but the shared regex and the locator accept them. With `agent-a..b.jsonl`, the session never saved (state `None`), there were 12 `save_session_failed` lines in 12 ticks, and the display was stuck at "200 tokens" instead of "1.1k tokens". See W-6b-1r. |
+| W-6b-2: README.md:37 | RESOLVED | README.md:37 now gives `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop`. Under `env -i` with a temp state dir, it prints `stopped` and exits 0. Without the variable it exits 2, which is why the variable is required. |
+| S-6b-4: InterruptedError as a control signal | RESOLVED | `tick.py:17-18` adds a private `_StopRequested`, used at `tick.py:54,60`. A real `InterruptedError` from herdr is now logged as `apply_failed error=InterruptedError` (`test_real_interrupted_error_from_herdr_is_a_publish_failure_not_stop`). Mutant MC (also treat InterruptedError as a stop) is KILLED. |
+| S-6b-1: make_logger with a different directory | RESOLVED | `log.py:18-23` replaces a handler whose `baseFilename` differs and keeps one with the same file (`test_make_logger_with_different_directory_replaces_handler`). Mutant MD (old early return) is KILLED. |
+
+### Questions from the caller
+- **Does dropping stale keys lose offsets for a file that is temporarily unlocatable?**
+  - If `locate()` returns `None` (`tick.py:83-84`), the method returns before the drop. A failed read (`tick.py:96-100`) also returns before any save. In both cases the stored offsets are kept.
+  - If only one subagent file is temporarily missing from the glob, `tick.py:92` drops its key in memory. That drop is persisted only when the same tick is dirty for another reason. Probe P3b (missing file, nothing else changed) kept the key, and 0 bytes were re-read afterwards.
+  - Probe P3 (missing file while main grows) persisted `[main]`. When the file came back, it was re-read from offset 0: 226,890 bytes, the whole file, read once. The total stayed correct (20.1k, then 20.2k, then 20.2k) because the ledger is idempotent (`ledger.py:9-12`, field-wise max) and its entries are not dropped with the key. A disappearing file therefore never lowers the total.
+  - Cost: one full re-read of that file, bounded by `MAX_READ` = 4 MiB per file per tick (`jsonl_tail.py:9`), spread over later ticks for larger files. There is no double count. This is acceptable.
+- **Does the SUBAGENT_NAME change affect attribution security?**
+  - No. `claude_locator.py:60` still requires all of the following: the realpath is under the projects root and is a file (`:27-29`), `real.parent.name == "subagents"`, and `real.parent.parent.name == session_id`. The new rule narrows the old glob check.
+  - Probe P4 tried three symlinks: to another session's `subagents/agent-z.jsonl`, to a file outside the root, and to a nested `subagents/nested/agent-n.jsonl`. `locate()` returned `[]` for all three, and the total stayed "100 tokens" (main only).
+  - File keys are dictionary labels only. They are never used as filesystem paths (`tick.py:89,106`, `state_store.py:26`).
+
+### Mutation summary (7 mutants, full suite)
+- KILLED (4): MA (no stale-key drop), MB (locator back to the glob match), MC (InterruptedError treated as a stop), MD (old logger early return).
+- SURVIVED (3):
+  - ME (drop `and file_key_allowed(k)` at `tick.py:92`): effectively equivalent. Located keys already pass the shared rule, except `..` names, which fail at save either way.
+  - MF (no `old.close()` at `log.py:22`): the replaced handler's file descriptor leaks. Untested and low impact.
+  - MG (remove `".." not in name` at `state_store.py:22`): survives because no test uses a `..` name. This is the W-6b-1r gap.
+
+### Spec compliance matrix (slice scope, unchanged plus new tests)
+| Requirement | Scenario | Test | Result |
+|---|---|---|---|
+| Approval-gated config patch | Custom sidebar | `test_sidebar_patch > test_custom_claude_row_only_adds_tokens` | COMPLIANT |
+| Single detached poller | Handoff re-run | `test_daemon > test_second_run_exits_zero_without_ticking` | COMPLIANT |
+| Stop and status actions | Stop | `test_daemon > test_stop_clears_published_persists_and_removes_pidfile`, `test_tick > test_real_interrupted_error_from_herdr_is_a_publish_failure_not_stop` | COMPLIANT |
+| Least privilege and safe logging | Content never stored | `test_log > test_sentinel_never_reaches_state_or_logs`, `test_state_store > test_file_key_allowlist` | COMPLIANT |
+| Uninstall and documentation | Uninstall | `test_sidebar_patch > test_backup_then_atomic_replace`, plus README.md:37 runtime check | COMPLIANT |
+| State and retention | Pruning | `test_state_store > test_prune_removes_sessions_older_than_30_days` | COMPLIANT |
+| Incremental tail | Growing file | `test_tick > test_total_grows_after_new_lines`, `test_disallowed_subagent_name_is_ignored_and_session_still_saves`, `test_old_disallowed_file_key_is_dropped_and_session_saves` | COMPLIANT (with the W-6b-1r edge case) |
+| Incremental tail | Truncation | `test_tail_ledger_integration > test_truncation_rescan_does_not_double_count` | COMPLIANT |
+
+**Compliance summary**: 8/8 scenarios compliant.
+
+### Issues found
+**CRITICAL**: None.
+
+**WARNING**:
+- W-6b-1r (carry-over, residual of W-6b-1): `mapping.py:6` (`SUBAGENT_NAME`) and `claude_locator.py:60` accept subagent names that contain `..`, such as `agent-a..b.jsonl`. `state_store.py:22` rejects them, so the "one rule" is still split. With such a file, `save_session` fails on every tick, offsets never persist, and a transcript larger than the read cap shows a stuck low total (probe: 200 instead of 1.1k tokens). Known Claude subagent names (`agent-<hex>`) never contain `..`, so the risk is low. Fix: move the `..` exclusion into the shared rule (a helper in `mapping.py` used by both callers), or drop it from the store, since keys are never used as paths. Add a test with a `..` name, which would kill MG.
+- W7 (carried): apply-progress has no TDD Cycle Evidence table.
+
+**SUGGESTION**:
+- S-6b-7 (new): skipped subagents are not logged. A file such as `agent-a b.jsonl` is dropped silently and the total excludes it. Consider logging the skip once per session.
+- S-6b-8 (new): no test asserts that the replaced handler is closed (`log.py:22`), so mutant MF survives.
+- S-6b-2, S-6b-3, S-6b-5 and S-6b-6: carried unchanged from the slice 6b report.
+
+### Verdict
+PASS WITH WARNINGS. W-6b-2, S-6b-4 and S-6b-1 are resolved with runtime and mutation evidence. W-6b-1 is resolved for the reported cases (odd names, stale and disallowed old keys), but `..` names still show the old failure mode (W-6b-1r, low likelihood), carried over under the single-correction rule. Stale-key dropping keeps the total correct; at worst it costs one bounded full re-read of the file. Attribution containment is unchanged. Tests pass 199/199. 5.3a and 6.4 remain user-owned.
