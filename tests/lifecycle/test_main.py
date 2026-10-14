@@ -38,6 +38,7 @@ class TestMainErrors(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
         self.assertIn("3.11", r.stderr)
 
+    @unittest.skipUnless(os.name == "posix", "until windows-support slice 2b selects WindowsHost")
     def test_unwritable_state_dir(self):
         blocker = self.tmp / "file"
         blocker.write_text("x")

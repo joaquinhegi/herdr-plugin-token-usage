@@ -29,6 +29,8 @@ def child_env(**extra) -> dict:
     if os.environ.get("SYSTEMROOT"):
         env["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     env.update(extra)
+    if "HOME" in extra:
+        env.setdefault("USERPROFILE", extra["HOME"])  # Path.home() on Windows
     return env
 
 

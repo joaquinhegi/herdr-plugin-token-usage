@@ -258,6 +258,7 @@ class TestCli(Base):
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("Traceback", r.stderr)
 
+    @unittest.skipUnless(os.name == "posix", "until windows-support slice 4 adds the Windows config path")
     def test_default_config_is_under_home_and_never_used_by_startup(self):
         r = self.run_cli("--print")  # HOME is a tempdir: no real config touched
         self.assertEqual(r.returncode, 1)

@@ -99,6 +99,8 @@ class LocatorTest(unittest.TestCase):
         self.touch("-proj", f"{A}.jsonl")
         bad_inputs = ("../outside/x", "..", "-proj/secret", "*", A.upper(), A + "x", "")
         for bad in bad_inputs:  # each would resolve to a real file without the UUID guard
+            if bad == "*" and os.name != "posix":
+                continue  # '*' is an invalid Windows filename
             self.touch("-proj", f"{bad}.jsonl")
         self.touch("outside", "x.jsonl")
         self.touch("-proj", "-proj", "secret.jsonl")

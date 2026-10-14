@@ -52,7 +52,8 @@ class HerdrCliTest(unittest.TestCase):
             with self.assertRaises(HerdrError, msg=repr(seq)):
                 cli.clear("p", "s", "n", seq)
         self.assertFalse((self.dir / "argv.json").exists())
-        cli.report("p", "s", "n", "x" * 80, 0, 0)
+        if os.name == "posix":  # positive step runs the shebang fake bin
+            cli.report("p", "s", "n", "x" * 80, 0, 0)
 
     def test_missing_bin_rejected(self):
         with self.assertRaises(HerdrError):
