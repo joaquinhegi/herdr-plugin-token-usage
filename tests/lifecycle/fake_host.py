@@ -38,7 +38,8 @@ class FakeHost:
 
     def request_stop(self, d: Path, verified_pid) -> None:
         self.calls.append(("request_stop", verified_pid))
-        self.holder = None  # the poller exits and drops its lock
+        if verified_pid is not None:
+            self.holder = None  # a real stop only reaches a verified poller, which then drops its lock
 
     def stop_requested(self, d: Path) -> bool:
         return False

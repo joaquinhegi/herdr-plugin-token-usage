@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from token_usage.adapters.state_store import StateStore  # noqa: E402
 from token_usage.domain.ledger import Ledger  # noqa: E402
 from token_usage.domain.usage import UsageCall  # noqa: E402
+from tests.support import posix_only  # noqa: E402
 
 UUID = "11111111-2222-3333-4444-555555555555"
 
@@ -44,12 +45,41 @@ class StateStoreTest(unittest.TestCase):
         self.assertFalse(restored.apply("req_a", UsageCall(2, 3, 0, 0)))
         self.assertEqual(restored.total, 5)
 
+    @posix_only  # Windows cannot open a directory to fsync it
     def test_atomic_write_uses_fsync_then_replace(self):
         calls = []
         with mock.patch("os.fsync", side_effect=lambda fd: calls.append("fsync")), \
                 mock.patch("os.replace", side_effect=lambda a, b: calls.append("replace")):
             self.store.save_session(UUID, state())
         self.assertEqual(calls, ["fsync", "replace", "fsync"])  # file, rename, parent dir
+
+    def flaky_replace(self, failures):
+        real, calls = os.replace, []
+
+        def replace(a, b):
+            calls.append(1)
+            if failures is None or len(calls) <= failures:
+                raise PermissionError("sharing violation")
+            real(a, b)
+
+        return replace, calls
+
+    def test_save_survives_transient_replace_failure(self):
+        replace, calls = self.flaky_replace(2)
+        with mock.patch("os.replace", side_effect=replace), mock.patch("token_usage.adapters.atomic.DELAY_S", 0):
+            self.assertTrue(self.store.save_session(UUID, state()))
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.store.load_session(UUID)["total"], 5)
+        self.assertEqual([p.name for p in (self.root / "sessions").iterdir()], [f"{UUID}.json"])
+
+    def test_persistent_replace_failure_keeps_previous_file_and_no_tmp(self):
+        self.store.save_session(UUID, state())
+        replace, _ = self.flaky_replace(None)
+        with mock.patch("os.replace", side_effect=replace), mock.patch("token_usage.adapters.atomic.DELAY_S", 0):
+            with self.assertRaises(PermissionError):
+                self.store.save_session(UUID, state(total=9))
+        self.assertEqual(self.store.load_session(UUID)["total"], 5)
+        self.assertEqual([p.name for p in (self.root / "sessions").iterdir()], [f"{UUID}.json"])
 
     def test_no_temp_files_left_and_only_dirty_written(self):
         self.assertTrue(self.store.save_session(UUID, state()))

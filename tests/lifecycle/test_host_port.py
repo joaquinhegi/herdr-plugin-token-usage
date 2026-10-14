@@ -1,8 +1,10 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
@@ -41,8 +43,29 @@ class HostInjectionTest(unittest.TestCase):
     def test_stop_passes_no_pid_when_identity_unverified(self):
         host = FakeHost(holder=111)
         self.write_pid(222)
-        daemon.stop(self.dir, host=host, sleep=lambda s: None, wait=0)
+        result = daemon.stop(self.dir, host=host, sleep=lambda s: None, wait=0)
         self.assertIn(("request_stop", None), host.calls)
+        self.assertEqual(result, "failed")  # the holder stays alive and unverified
+
+    def test_pidfile_write_survives_transient_replace_failure(self):
+        real, calls = os.replace, []
+
+        def flaky(a, b):
+            calls.append(1)
+            if len(calls) < 3:
+                raise PermissionError("sharing violation")
+            real(a, b)
+
+        with mock.patch("os.replace", side_effect=flaky), mock.patch("token_usage.adapters.atomic.DELAY_S", 0):
+            daemon._write_pidfile(self.dir, {"pid": 7})
+        self.assertEqual(json.loads((self.dir / daemon.PID).read_text()), {"pid": 7})
+        self.assertEqual([p.name for p in self.dir.iterdir()], [daemon.PID])
+
+    def test_pidfile_persistent_failure_leaves_no_tmp(self):
+        with mock.patch("os.replace", side_effect=PermissionError), mock.patch("token_usage.adapters.atomic.DELAY_S", 0):
+            with self.assertRaises(PermissionError):
+                daemon._write_pidfile(self.dir, {"pid": 7})
+        self.assertEqual(list(self.dir.iterdir()), [])
 
     def test_status_uses_host_probe(self):
         host = FakeHost(holder=4242)
@@ -74,6 +97,21 @@ class HostInjectionTest(unittest.TestCase):
         self.assertEqual(names[0], "acquire_lock")
         self.assertIn("record_identity", names)
         self.assertEqual(names[-1], "release")
+
+
+@unittest.skipUnless(os.name == "posix", "PosixHost uses flock")
+class PosixHostTest(unittest.TestCase):
+    def test_record_identity_truncates_a_longer_stale_pid(self):
+        from token_usage.lifecycle.host_posix import PosixHost, LOCK
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        (d / LOCK).write_text("987654321")  # crashed holder left a longer pid
+        host = PosixHost()
+        fd = host.acquire_lock(d)
+        self.addCleanup(os.close, fd)
+        host.record_identity(fd, 42)
+        self.assertEqual((d / LOCK).read_text(), "42")
 
 
 if __name__ == "__main__":
