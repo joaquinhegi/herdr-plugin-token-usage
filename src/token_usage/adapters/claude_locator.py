@@ -28,7 +28,7 @@ class ClaudeLocator:
         if not isinstance(session_id, str) or not UUID.fullmatch(session_id):
             return None
         root_real = Path(os.path.realpath(self.root))
-        mains = []
+        mains: dict[Path, Path] = {}
         try:
             projects = sorted(p for p in root_real.iterdir() if p.is_dir())
         except OSError:
@@ -36,16 +36,18 @@ class ClaudeLocator:
         for project in projects:
             main = self._resolve(project / f"{session_id}.jsonl", root_real)
             if main and main.name == f"{session_id}.jsonl":
-                mains.append((project, main))
+                mains.setdefault(main, project)
         if len(mains) != 1:
             log_event(self.logger, "locate_failed", reason="ambiguous" if mains else "missing", matches=len(mains))
             return None
-        project, main = mains[0]
-        subs = []
+        main = next(iter(mains))
+        project = main.parent
+        subs: list[Path] = []
         sub_dir = project / session_id / "subagents"
         if sub_dir.is_dir():
             for f in sorted(sub_dir.glob("agent-*.jsonl")):
                 real = self._resolve(f, root_real)
                 if real and real.match("agent-*.jsonl") and real.parent.name == "subagents" and real.parent.parent.name == session_id:
-                    subs.append(real)
+                    if real not in subs:
+                        subs.append(real)
         return Located(main, subs)

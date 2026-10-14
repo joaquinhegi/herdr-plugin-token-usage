@@ -124,6 +124,19 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(got.main, main)
         self.assertEqual(got.subagents, [ok])
 
+    def test_duplicate_subagent_symlink_in_same_dir_yields_one(self):
+        self.touch("-proj", f"{A}.jsonl")
+        a = self.touch("-proj", A, "subagents", "agent-a.jsonl")
+        os.symlink(a, a.parent / "agent-dup.jsonl")
+        self.assertEqual(self.locator.locate(A).subagents, [a])
+
+    def test_project_dir_alias_to_same_file_is_not_ambiguous(self):
+        main = self.touch("-proj", f"{A}.jsonl")
+        os.symlink(self.root / "-proj", self.root / "-alias")
+        got = self.locator.locate(A)
+        self.assertIsNotNone(got)
+        self.assertEqual(got.main, main)
+
 
 if __name__ == "__main__":
     unittest.main()
