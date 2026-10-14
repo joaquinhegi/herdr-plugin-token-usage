@@ -59,13 +59,16 @@ class TailTest(unittest.TestCase):
         r2 = tail.read(self.path, r1.position)
         self.assertEqual(len(r2.objects), 4)
 
-    def test_line_larger_than_read_cap_is_still_consumed(self):
+    def test_line_larger_than_read_cap_is_consumed_through_first_newline_only(self):
         big = b'{"a":"' + b"x" * 100 + b'"}\n'
         self.append(big + b'{"a":2}\n')
         tail = JsonlTail(max_read=32, max_fragment=1000)
         r1 = tail.read(self.path, None)
-        self.assertEqual(r1.objects[-1], {"a": 2})
-        self.assertEqual(len(r1.objects), 2)
+        self.assertEqual(len(r1.objects), 1)
+        self.assertEqual(r1.objects[0]["a"], "x" * 100)
+        self.assertEqual(r1.position["offset"], len(big))
+        r2 = tail.read(self.path, r1.position)
+        self.assertEqual(r2.objects, [{"a": 2}])
 
     def test_oversized_fragment_skipped_to_next_newline(self):
         tail = JsonlTail(max_read=32, max_fragment=64)

@@ -47,7 +47,7 @@ class JsonlTail:
                 # Bound by the current line's length only, not the rest of the file.
                 fh.seek(offset)
                 data = fh.read(min(available, self.max_fragment + 1))
-                end = data.rfind(b"\n")
+                end = data.find(b"\n")  # consume only the one completed line
                 if end < 0 and len(data) > self.max_fragment:
                     return self._skip_fragment(fh, offset, result)
             if end < 0:
