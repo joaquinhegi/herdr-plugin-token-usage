@@ -17,9 +17,9 @@ class TestManifest(unittest.TestCase):
             self.assertIsInstance(self.m[key], str)
 
     def test_startup_and_actions_are_argv_lists(self):
-        self.assertEqual([s["command"] for s in self.m["startup"]], [["python3", "src/main.py", "start"]])
+        self.assertEqual([s["command"] for s in self.m["startup"]], [["python3", "-B", "src/main.py", "start"]])
         actions = {a["id"]: a["command"] for a in self.m["actions"]}
-        self.assertEqual(actions, {c: ["python3", "src/main.py", c] for c in ("start", "stop", "status")})
+        self.assertEqual(actions, {c: ["python3", "-B", "src/main.py", c] for c in ("start", "stop", "status")})
 
     def test_no_shell_strings_or_build(self):
         commands = [s["command"] for s in self.m["startup"]] + [a["command"] for a in self.m["actions"]]

@@ -8,19 +8,19 @@ min_herdr_version = "0.8.2"
 description = "Per-pane Claude token totals published as a $tokens sidebar token."
 
 [[startup]]
-command = ["python3", "src/main.py", "start"]
+command = ["python3", "-B", "src/main.py", "start"]
 
 [[actions]]
 id = "start"
 title = "Token Usage: start"
-command = ["python3", "src/main.py", "start"]
+command = ["python3", "-B", "src/main.py", "start"]
 
 [[actions]]
 id = "stop"
 title = "Token Usage: stop"
-command = ["python3", "src/main.py", "stop"]
+command = ["python3", "-B", "src/main.py", "stop"]
 
 [[actions]]
 id = "status"
 title = "Token Usage: status"
-command = ["python3", "src/main.py", "status"]
+command = ["python3", "-B", "src/main.py", "status"]

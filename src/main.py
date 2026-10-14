@@ -1,9 +1,14 @@
 """Plugin entrypoint: argv dispatch only (run | start | stop | status)."""
 
-import os
 import sys
-import time
-from pathlib import Path
+
+if sys.version_info < (3, 10):  # before any import that needs PEP 604 syntax
+    print("token-usage: Python 3.10 or newer is required", file=sys.stderr)
+    raise SystemExit(2)
+
+import os  # noqa: E402
+import time  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -48,7 +53,18 @@ def main(argv: list[str]) -> int:
     if not state or (cmd in ("run", "start") and not bin_path):
         print("token-usage: HERDR_PLUGIN_STATE_DIR and HERDR_BIN_PATH must be set", file=sys.stderr)
         return 2
+    if cmd == "start" and not (os.path.isabs(bin_path) and os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)):
+        print("token-usage: HERDR_BIN_PATH must be an absolute path to an executable", file=sys.stderr)
+        return 2
     state_dir, socket_path = Path(state), _env("HERDR_SOCKET_PATH")
+    try:
+        return _dispatch(cmd, state_dir, bin_path, socket_path)
+    except OSError:
+        print("token-usage: state directory is not usable", file=sys.stderr)
+        return 1
+
+
+def _dispatch(cmd: str, state_dir: Path, bin_path: str | None, socket_path: str | None) -> int:
     if cmd == "run":
         try:
             poller = _build_poller(state_dir, bin_path, socket_path)
@@ -65,7 +81,18 @@ def main(argv: list[str]) -> int:
         from token_usage.adapters.state_store import StateStore
         result = daemon.status(state_dir, StateStore(state_dir))
     print(result)
-    return 1 if result == "failed" else 0
+    if result == "failed":
+        _log_failed_handoff(state_dir)
+        return 1
+    return 0
+
+
+def _log_failed_handoff(state_dir: Path) -> None:
+    from token_usage.adapters import log as tlog
+
+    logger = tlog.make_logger(state_dir)
+    tlog.log_event(logger, "handoff_failed", cmd="start/stop")
+    tlog.close_logger(logger)
 
 
 if __name__ == "__main__":
