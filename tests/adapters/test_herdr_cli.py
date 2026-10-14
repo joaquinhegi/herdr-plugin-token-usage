@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from token_usage.adapters.herdr_cli import HerdrCli  # noqa: E402
 from token_usage.ports import HerdrError  # noqa: E402
 from tests.adapters.herdr_fakes import fixture_panes, make_fake_bin  # noqa: E402
+from tests.support import posix_only  # noqa: E402
 
 
 class HerdrCliTest(unittest.TestCase):
@@ -57,6 +58,7 @@ class HerdrCliTest(unittest.TestCase):
         with self.assertRaises(HerdrError):
             HerdrCli(str(self.dir / "nope"))
 
+    @posix_only
     def test_non_executable_rejected(self):
         p = self.dir / "plain"
         p.write_text("x")
@@ -64,6 +66,7 @@ class HerdrCliTest(unittest.TestCase):
         with self.assertRaises(HerdrError):
             HerdrCli(str(p))
 
+    @posix_only
     def test_list_panes_parses_fixture_and_bare_list(self):
         cli = HerdrCli(str(make_fake_bin(self.dir)))
         self.assertEqual(cli.list_panes(), fixture_panes())
@@ -71,6 +74,7 @@ class HerdrCliTest(unittest.TestCase):
         bare = HerdrCli(str(make_fake_bin(self.dir, out='[{"pane_id":"a"}]')))
         self.assertEqual(bare.list_panes(), [{"pane_id": "a"}])
 
+    @posix_only
     def test_metacharacters_are_literal_single_argv_item(self):
         cli = HerdrCli(str(make_fake_bin(self.dir)))
         value = "; rm -rf ~ $(x)"
@@ -81,6 +85,7 @@ class HerdrCliTest(unittest.TestCase):
              "--token", f"usage={value}", "--seq", "3", "--ttl-ms", "60000"],
         )
 
+    @posix_only
     def test_clear_argv(self):
         HerdrCli(str(make_fake_bin(self.dir))).clear("w1:p1", "token-usage", "usage", 4)
         self.assertEqual(
@@ -89,6 +94,7 @@ class HerdrCliTest(unittest.TestCase):
              "--clear-token", "usage", "--seq", "4"],
         )
 
+    @posix_only
     def test_timeout_nonzero_and_invalid_json(self):
         with self.assertRaises(HerdrError):
             HerdrCli(str(make_fake_bin(self.dir, sleep=5)), timeout=0.3).list_panes()

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from token_usage.lifecycle import sidebar_patch as sp
+from tests.support import child_env, needs_symlink, posix_only
 
 ROOT = Path(__file__).resolve().parents[2]
 MAIN = ROOT / "src" / "main.py"
@@ -164,14 +165,16 @@ class TestPlan(Base):
 class TestApply(Base):
     def test_backup_then_atomic_replace(self):
         self.write(CUSTOM)
-        self.cfg.chmod(0o640)
+        if os.name == "posix":
+            self.cfg.chmod(0o640)
         self.assertEqual(sp.apply(self.cfg), 0)
         backups = [p for p in self.dir.iterdir() if p.name.startswith("config.toml.bak-")]
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), CUSTOM)
         self.assertEqual(len(list(self.dir.iterdir())), 2)  # no temp files left
         self.assertIn('["cwd", "$tokens"]', self.cfg.read_text())
-        self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o640)
+        if os.name == "posix":
+            self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o640)
 
     def test_apply_refusal_changes_nothing(self):
         self.write("[ui.sidebar.agents]\nspacing = 1\n")
@@ -187,6 +190,7 @@ class TestApply(Base):
         self.assertEqual(sp.apply(self.cfg), 0)  # already patched: no new backup
         self.assertEqual(len(os.listdir(self.dir)), 2)
 
+    @needs_symlink
     def test_symlink_target_is_patched_in_place_and_link_kept(self):
         real_dir = self.dir / "real"
         real_dir.mkdir()
@@ -202,6 +206,7 @@ class TestApply(Base):
         self.assertEqual(len(backups), 1)
         self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["link.toml", "real"])
 
+    @posix_only
     def test_backup_preserves_private_mode(self):
         self.write(ROWS_ONLY)
         self.cfg.chmod(0o600)
@@ -213,7 +218,7 @@ class TestApply(Base):
 
 class TestCli(Base):
     def run_cli(self, *args):
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.dir)}
+        env = child_env(HOME=str(self.dir))
         return subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", *args], env=env,
                               capture_output=True, text=True, timeout=20)
 
@@ -242,7 +247,7 @@ class TestCli(Base):
 
     def test_default_config_honors_herdr_config_path(self):
         self.write(ROWS_ONLY)
-        env = {"PATH": os.environ["PATH"], "HOME": str(self.dir / "nohome"), "HERDR_CONFIG_PATH": str(self.cfg)}
+        env = child_env(HOME=str(self.dir / "nohome"), HERDR_CONFIG_PATH=str(self.cfg))
         r = subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", "--print"], env=env,
                            capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)

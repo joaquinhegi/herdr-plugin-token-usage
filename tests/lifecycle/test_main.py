@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests.support import child_env, posix_only
+
 MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
 
 
@@ -16,8 +18,7 @@ class TestMainErrors(unittest.TestCase):
         self.bin = self.tmp / "herdr"
         self.bin.write_text("#!/bin/sh\n")
         self.bin.chmod(0o755)
-        self.env = {"PATH": os.environ["PATH"], "HOME": str(self.tmp), "HERDR_BIN_PATH": str(self.bin),
-                    "HERDR_SOCKET_PATH": str(self.tmp / "no.sock")}
+        self.env = child_env(HOME=str(self.tmp), HERDR_BIN_PATH=str(self.bin), HERDR_SOCKET_PATH=str(self.tmp / "no.sock"))
 
     def run_main(self, cmd, **env):
         e = {**self.env, **env}
@@ -43,6 +44,7 @@ class TestMainErrors(unittest.TestCase):
         for cmd in ("status", "stop", "start"):
             self.assertClean(self.run_main(cmd, HERDR_PLUGIN_STATE_DIR=str(blocker / "sub")))
 
+    @posix_only  # a plain file passes the X_OK check on Windows
     def test_start_rejects_bad_bin_path(self):
         state = str(self.tmp / "state")
         plain = self.tmp / "plain"

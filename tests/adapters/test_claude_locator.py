@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from token_usage.adapters import log as tlog  # noqa: E402
 from token_usage.adapters.claude_locator import ClaudeLocator  # noqa: E402
+from tests.support import needs_symlink  # noqa: E402
 
 A = "1a1a1a1a-1111-4111-8bbb-111111111111"
 B = "2b2b2b2b-2222-4222-8ccc-222222222222"
@@ -45,6 +46,7 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(self.locator.locate(A).main, a)
         self.assertEqual(self.locator.locate(B).main, b)
 
+    @needs_symlink
     def test_subagents_are_read_next_to_the_resolved_main(self):
         """Main symlinked -p -> -q inside root: only -q's subagents belong to the session."""
         real = self.touch("-q", f"{A}.jsonl")
@@ -108,12 +110,14 @@ class LocatorTest(unittest.TestCase):
         self.assertIsNone(self.locator.locate(None))
         self.assertIsNone(self.locator.locate(123))
 
+    @needs_symlink
     def test_in_root_main_symlink_to_other_session_is_none(self):
         b = self.touch("-proj", f"{B}.jsonl")
         os.symlink(b, self.root / "-proj" / f"{A}.jsonl")
         self.assertIsNone(self.locator.locate(A))
         self.assertEqual(self.locator.locate(B).main, b)
 
+    @needs_symlink
     def test_in_root_subagent_symlink_to_other_session_is_dropped(self):
         main = self.touch("-proj", f"{A}.jsonl")
         ok = self.touch("-proj", A, "subagents", "agent-a.jsonl")
@@ -129,17 +133,20 @@ class LocatorTest(unittest.TestCase):
         self.touch("-p2", A, "subagents", "agent-a.jsonl")
         self.assertIsNone(self.locator.locate(A))
 
+    @needs_symlink
     def test_main_symlink_escaping_root_is_none(self):
         target = self.touch("real.jsonl", base=self.outside)
         (self.root / "-proj").mkdir()
         os.symlink(target, self.root / "-proj" / f"{A}.jsonl")
         self.assertIsNone(self.locator.locate(A))
 
+    @needs_symlink
     def test_project_dir_symlink_escape_is_none(self):
         self.touch(f"{A}.jsonl", base=self.outside)
         os.symlink(self.outside, self.root / "-evil")
         self.assertIsNone(self.locator.locate(A))
 
+    @needs_symlink
     def test_escaping_subagent_symlink_is_dropped_only(self):
         main = self.touch("-proj", f"{A}.jsonl")
         ok = self.touch("-proj", A, "subagents", "agent-a.jsonl")
@@ -149,12 +156,14 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(got.main, main)
         self.assertEqual(got.subagents, [ok])
 
+    @needs_symlink
     def test_duplicate_subagent_symlink_in_same_dir_yields_one(self):
         self.touch("-proj", f"{A}.jsonl")
         a = self.touch("-proj", A, "subagents", "agent-a.jsonl")
         os.symlink(a, a.parent / "agent-dup.jsonl")
         self.assertEqual(self.locator.locate(A).subagents, [a])
 
+    @needs_symlink
     def test_project_dir_alias_to_same_file_is_not_ambiguous(self):
         main = self.touch("-proj", f"{A}.jsonl")
         os.symlink(self.root / "-proj", self.root / "-alias")
