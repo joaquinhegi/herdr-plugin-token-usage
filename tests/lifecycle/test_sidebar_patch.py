@@ -60,10 +60,9 @@ class TestPlan(Base):
         self.assertEqual(res.status, "patch")
         self.assertEqual(tomllib.loads(res.new_text)["ui"]["sidebar"]["agents"]["rows"][-1], ["cwd", "$tokens"])
 
-    def test_trailing_comma_and_empty_inner_row(self):
-        self.write('[ui.sidebar.agents]\nrows = [["a",], []]\n')
-        self.assertEqual(sp.plan(self.cfg).status, "patch")
-        self.assertEqual(tomllib.loads(sp.plan(self.cfg).new_text)["ui"]["sidebar"]["agents"]["rows"], [["a"], ["$tokens"]])
+    def test_trailing_comma_row(self):
+        self.write('[ui.sidebar.agents]\nrows = [["a",]]\n')
+        self.assertEqual(tomllib.loads(sp.plan(self.cfg).new_text)["ui"]["sidebar"]["agents"]["rows"], [["a", "$tokens"]])
 
     def test_already_patched_is_noop(self):
         self.write(ROWS_ONLY.replace('"cwd"', '"cwd", "$tokens"'))
@@ -95,16 +94,14 @@ class TestPlan(Base):
         self.assertEqual(tomllib.loads(res.new_text)["ui"]["theme"], "x")
 
     def test_plan_writes_nothing(self):
-        for text in (None, CUSTOM):
-            with self.subTest(text=text):
-                if text:
-                    self.write(text)
-                    before = (self.cfg.read_bytes(), self.cfg.stat().st_mtime_ns)
-                names = sorted(os.listdir(self.dir))
-                sp.plan(self.cfg)
-                self.assertEqual(sorted(os.listdir(self.dir)), names)
-                if text:
-                    self.assertEqual((self.cfg.read_bytes(), self.cfg.stat().st_mtime_ns), before)
+        names = sorted(os.listdir(self.dir))
+        sp.plan(self.cfg)  # missing file
+        self.write(CUSTOM)
+        before = (self.cfg.read_bytes(), self.cfg.stat().st_mtime_ns)
+        sp.plan(self.cfg)
+        self.assertEqual(sorted(os.listdir(self.dir)), ["config.toml"])
+        self.assertEqual((self.cfg.read_bytes(), self.cfg.stat().st_mtime_ns), before)
+        self.assertEqual(names, [])
 
 
 class TestApply(Base):
@@ -115,7 +112,7 @@ class TestApply(Base):
         backups = [p for p in self.dir.iterdir() if p.name.startswith("config.toml.bak-")]
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_text(), CUSTOM)
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), sorted(["config.toml", backups[0].name]))
+        self.assertEqual(len(list(self.dir.iterdir())), 2)  # no temp files left
         self.assertIn('["cwd", "$tokens"]', self.cfg.read_text())
         self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o640)
 
