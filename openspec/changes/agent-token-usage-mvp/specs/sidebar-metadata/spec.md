@@ -14,7 +14,7 @@ The `tokens` value MUST be: <1000 → `N tokens`; <1,000,000 → `X.Yk tokens`; 
 - THEN `950 tokens`, `1.3k tokens`, `125.4k tokens`, `1.2M tokens`
 
 ### Requirement: Publish and clear (RF04, C11)
-The plugin MUST publish `tokens` under a fixed local source only when the value changes, with a ~60 s TTL refreshed while the pane is alive, via the socket API with CLI fallback. It MUST clear it on pane close, session change or loss of reliable mapping, never touching other panes or sources. It MUST NOT publish `0` for unknown.
+The plugin MUST publish `tokens` under a fixed local source only when the value changes, with a ~60 s TTL refreshed while the pane is alive, with reads (`pane list`) via the socket API with CLI fallback and metadata writes via the CLI (`herdr pane report-metadata`) until socket `report_metadata` is verified (see design.md Open Questions). It MUST clear it on pane close, session change or loss of reliable mapping, never touching other panes or sources. It MUST NOT publish `0` for unknown.
 
 #### Scenario: Unchanged value
 - GIVEN the last published value equals the current one

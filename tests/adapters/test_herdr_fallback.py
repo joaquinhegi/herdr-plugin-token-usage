@@ -1,14 +1,17 @@
 import json
+import sys
 import logging
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from token_usage.adapters.herdr_cli import HerdrCli
-from token_usage.adapters.herdr_fallback import FallbackHerdr
-from token_usage.adapters.herdr_socket import HerdrSocket
-from tests.adapters.herdr_fakes import FakeServer, fixture_panes, make_fake_bin, ok_handler
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from token_usage.adapters.herdr_cli import HerdrCli  # noqa: E402
+from token_usage.adapters.herdr_fallback import FallbackHerdr  # noqa: E402
+from token_usage.adapters.herdr_socket import HerdrSocket  # noqa: E402
+from tests.adapters.herdr_fakes import FakeServer, fixture_panes, make_fake_bin, ok_handler  # noqa: E402
 
 
 class FallbackTest(unittest.TestCase):

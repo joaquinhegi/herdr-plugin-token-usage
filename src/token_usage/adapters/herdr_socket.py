@@ -6,6 +6,7 @@ herdr 0.8.2, so metadata writes (report / clear) go through the CLI client.
 
 import json
 import socket
+import time
 from typing import Any
 
 from token_usage.adapters.herdr_cli import panes_from
@@ -20,9 +21,13 @@ class HerdrSocket:
         self._timeout = timeout
         self._max = max_bytes
 
-    def _read_line(self, sock: socket.socket) -> bytes:
+    def _read_line(self, sock: socket.socket, deadline: float) -> bytes:
         buf = b""
         while b"\n" not in buf:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise HerdrError("deadline_exceeded")
+            sock.settimeout(remaining)
             chunk = sock.recv(65536)
             if not chunk:
                 raise HerdrError("closed_without_newline")
@@ -34,11 +39,12 @@ class HerdrSocket:
     def list_panes(self) -> list[dict[str, Any]]:
         request = json.dumps({"id": _REQ_ID, "method": "pane.list", "params": {}}).encode() + b"\n"
         try:
+            deadline = time.monotonic() + self._timeout
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.settimeout(self._timeout)
                 sock.connect(self._path)
                 sock.sendall(request)
-                reply = json.loads(self._read_line(sock))
+                reply = json.loads(self._read_line(sock, deadline))
         except (OSError, ValueError) as exc:
             raise HerdrError(type(exc).__name__) from None
         if not isinstance(reply, dict) or reply.get("id") != _REQ_ID or "error" in reply:

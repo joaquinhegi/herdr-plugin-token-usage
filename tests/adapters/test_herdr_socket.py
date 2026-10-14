@@ -1,10 +1,14 @@
 import json
+import sys
 import time
 import unittest
+from pathlib import Path
 
-from token_usage.adapters.herdr_socket import HerdrSocket
-from token_usage.ports import HerdrError
-from tests.adapters.herdr_fakes import FakeServer, fixture_panes, ok_handler
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from token_usage.adapters.herdr_socket import HerdrSocket  # noqa: E402
+from token_usage.ports import HerdrError  # noqa: E402
+from tests.adapters.herdr_fakes import FakeServer, fixture_panes, ok_handler  # noqa: E402
 
 
 class HerdrSocketTest(unittest.TestCase):
@@ -39,6 +43,25 @@ class HerdrSocketTest(unittest.TestCase):
             conn.sendall(b"x" * 4096)
         with self.assertRaises(HerdrError):
             HerdrSocket(self.serve(h).path, max_bytes=4096).list_panes()
+
+    def test_oversized_with_newline(self):
+        def h(req, conn):
+            conn.sendall(b'{"id":"req_1","result":{"panes":[]},"pad":"' + b"x" * 9000 + b'"}\n')
+        with self.assertRaises(HerdrError):
+            HerdrSocket(self.serve(h).path, max_bytes=4096).list_panes()
+
+    def test_default_timeout_is_2(self):
+        self.assertEqual(HerdrSocket("/x")._timeout, 2)
+
+    def test_slow_drip_hits_total_deadline(self):
+        def h(req, conn):
+            for _ in range(200):
+                conn.sendall(b"x")
+                time.sleep(0.05)
+        start = time.monotonic()
+        with self.assertRaises(HerdrError):
+            HerdrSocket(self.serve(h).path, timeout=0.2).list_panes()
+        self.assertLess(time.monotonic() - start, 1.0)
 
     def test_never_responds_times_out(self):
         with self.assertRaises(HerdrError):

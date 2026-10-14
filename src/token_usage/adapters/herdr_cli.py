@@ -17,6 +17,11 @@ def _check(*values: str) -> None:
             raise HerdrError("invalid_identifier")
 
 
+def _int(v: int) -> None:
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise HerdrError("invalid_number")
+
+
 def panes_from(data: Any) -> list[dict[str, Any]]:
     """Accept a bare list, {"panes": [...]} or {"result": {"panes": [...]}}."""
     if isinstance(data, dict) and isinstance(data.get("result"), dict):
@@ -41,7 +46,7 @@ class HerdrCli:
                 [self._bin, *args], shell=False, capture_output=True, timeout=self._timeout,
                 check=False, stdin=subprocess.DEVNULL, text=True,
             )
-        except (subprocess.TimeoutExpired, OSError, UnicodeDecodeError) as exc:
+        except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
             raise HerdrError(type(exc).__name__) from None
         if proc.returncode != 0:
             raise HerdrError("nonzero_exit")
@@ -55,10 +60,15 @@ class HerdrCli:
 
     def report(self, pane_id: str, source: str, token: str, value: str, seq: int, ttl_ms: int) -> None:
         _check(pane_id, source, token)
+        if not isinstance(value, str) or not 1 <= len(value) <= 80 or not value.isprintable():
+            raise HerdrError("invalid_value")
+        _int(seq)
+        _int(ttl_ms)
         self._run("pane", "report-metadata", pane_id, "--source", source,
-                  "--token", f"{token}={value}", "--seq", str(int(seq)), "--ttl-ms", str(int(ttl_ms)))
+                  "--token", f"{token}={value}", "--seq", str(seq), "--ttl-ms", str(ttl_ms))
 
     def clear(self, pane_id: str, source: str, token: str, seq: int) -> None:
         _check(pane_id, source, token)
+        _int(seq)
         self._run("pane", "report-metadata", pane_id, "--source", source,
-                  "--clear-token", token, "--seq", str(int(seq)))
+                  "--clear-token", token, "--seq", str(seq))

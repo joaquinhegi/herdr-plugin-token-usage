@@ -1,12 +1,16 @@
 import json
+import os
+import sys
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from token_usage.adapters.herdr_cli import HerdrCli
-from token_usage.ports import HerdrError
-from tests.adapters.herdr_fakes import fixture_panes, make_fake_bin
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+
+from token_usage.adapters.herdr_cli import HerdrCli  # noqa: E402
+from token_usage.ports import HerdrError  # noqa: E402
+from tests.adapters.herdr_fakes import fixture_panes, make_fake_bin  # noqa: E402
 
 
 class HerdrCliTest(unittest.TestCase):
@@ -18,8 +22,36 @@ class HerdrCliTest(unittest.TestCase):
         return json.loads((self.dir / "argv.json").read_text())
 
     def test_relative_bin_rejected(self):
+        make_fake_bin(self.dir)
+        old = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, old)
+        self.assertTrue(os.path.isfile("herdr") and os.access("herdr", os.X_OK))
         with self.assertRaises(HerdrError):
             HerdrCli("herdr")
+
+    def test_default_timeout_is_2(self):
+        self.assertEqual(HerdrCli(str(make_fake_bin(self.dir)))._timeout, 2)
+
+    def test_clear_invalid_ids_rejected_before_spawn(self):
+        cli = HerdrCli(str(make_fake_bin(self.dir)))
+        for pane, source, name in [("w1 p1", "s", "n"), ("--evil", "s", "n"), ("p", "s;x", "n"), ("p", "s", "n=v"), ("p", "s", "")]:
+            with self.assertRaises(HerdrError):
+                cli.clear(pane, source, name, 1)
+        self.assertFalse((self.dir / "argv.json").exists())
+
+    def test_invalid_value_seq_ttl_rejected_before_spawn(self):
+        cli = HerdrCli(str(make_fake_bin(self.dir)))
+        cases = [("a\0b", 1, 1), ("a\nb", 1, 1), ("", 1, 1), ("x" * 81, 1, 1), (5, 1, 1),
+                 ("v", "1", 1), ("v", -1, 1), ("v", True, 1), ("v", 1, True), ("v", 1, -1), ("v", 1, 1.5)]
+        for value, seq, ttl in cases:
+            with self.assertRaises(HerdrError, msg=repr((value, seq, ttl))):
+                cli.report("p", "s", "n", value, seq, ttl)
+        for seq in ("1", -1, True, None):
+            with self.assertRaises(HerdrError, msg=repr(seq)):
+                cli.clear("p", "s", "n", seq)
+        self.assertFalse((self.dir / "argv.json").exists())
+        cli.report("p", "s", "n", "x" * 80, 0, 0)
 
     def test_missing_bin_rejected(self):
         with self.assertRaises(HerdrError):
