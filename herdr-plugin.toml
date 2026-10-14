@@ -1,0 +1,26 @@
+# Token Usage: shows per-pane agent token totals as a `$tokens` sidebar token.
+# [[startup]] runs once after session restore (and again on live handoff); the
+# start command is idempotent and self-detaches the poller (see lifecycle/daemon.py).
+id = "local.token-usage"
+name = "Token Usage"
+version = "0.1.0"
+min_herdr_version = "0.8.2"
+description = "Per-pane Claude token totals published as a $tokens sidebar token."
+
+[[startup]]
+command = ["python3", "src/main.py", "start"]
+
+[[actions]]
+id = "start"
+title = "Token Usage: start"
+command = ["python3", "src/main.py", "start"]
+
+[[actions]]
+id = "stop"
+title = "Token Usage: stop"
+command = ["python3", "src/main.py", "stop"]
+
+[[actions]]
+id = "status"
+title = "Token Usage: status"
+command = ["python3", "src/main.py", "status"]
