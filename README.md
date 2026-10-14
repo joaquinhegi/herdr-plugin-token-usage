@@ -8,7 +8,7 @@ Shows the running token total of each Claude pane as a `$tokens` sidebar token (
 
 ## Requirements
 
-Python >= 3.11 (for `tomllib`) as `python3` on the PATH Herdr uses (macOS `/usr/bin/python3` is 3.9 and exits with an error). Stdlib only.
+macOS or Linux; Windows is not supported yet (Herdr reports the plugin as unsupported there). Python >= 3.11 (for `tomllib`) as `python3` on the PATH Herdr uses (macOS `/usr/bin/python3` is 3.9 and exits with an error). Stdlib only.
 
 ## Install
 
