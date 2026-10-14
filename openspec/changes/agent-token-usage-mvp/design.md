@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-Hexagonal Python (>= 3.10) stdlib plugin. A pure domain (usage accounting, dedupe, mapping, reconcile, formatting) is driven by one application service, `TickService`, through ports. Adapters (Herdr socket/CLI, JSONL tailer, Claude locator, JSON state store, clock) are the only code that touches I/O. A self-detached poller runs `TickService.tick()` every 4 s (Exploration Approach 1).
+Hexagonal Python (>= 3.11) stdlib plugin. A pure domain (usage accounting, dedupe, mapping, reconcile, formatting) is driven by one application service, `TickService`, through ports. Adapters (Herdr socket/CLI, JSONL tailer, Claude locator, JSON state store, clock) are the only code that touches I/O. A self-detached poller runs `TickService.tick()` every 4 s (Exploration Approach 1).
 
 ## Module Layout
 
@@ -27,7 +27,7 @@ tests/unit/ tests/adapters/ tests/scenarios/ tests/fixtures/
 |---|---|---|---|
 | Dedupe | Ledger per session: key `message.id` → fallback `requestId`; value `(in,out,cc,cr)` merged field-wise max; total kept incrementally (`+= new_sum - old_sum`). Lines with neither id, `<synthetic>` model, or error lines are skipped. | Sum every line; dedupe by `uuid` | Idempotent merge makes replay, resume-copied history, rotation re-reads and streaming partial usage safe. |
 | Subagents | Main + `subagents/agent-*.jsonl` share one session ledger | Separate totals | User decision; ids never collide across files. |
-| Duplicate guard | `fcntl.flock` on `poller.lock` held for daemon lifetime; the holder writes its pid into the lock file (truncated by any probe that wins the lock, so a pid there means a live poller); pidfile `{pid, socket_path, started_at}` is informational and a signal is sent only when pidfile pid == lock-file pid | Pidfile + `kill -0` only | Lock is atomic and immune to stale pids and PID reuse. |
+| Duplicate guard | `fcntl.flock` on `poller.lock` held for daemon lifetime; the holder writes its pid into the lock file (truncated by any probe that wins the lock, so a pid there means a live poller); pidfile `{pid, socket_path, started_at}` is informational and a signal is sent only when pidfile pid == lock-file pid | Pidfile + `kill -0` only | Lock is atomic and not fooled by stale pids; a narrow PID-reuse window remains between reading the pid and signalling it. |
 | Handoff | `start` with live daemon: no-op if recorded `socket_path` equals current env, else SIGTERM, wait `WAIT_S` (8 s), respawn | Always no-op | Startup re-runs on live handoff; the old daemon may hold a dead socket path. |
 | Spawn | `subprocess.Popen([sys.executable, "-B", main.py, "run"], start_new_session=True, stdio=DEVNULL, close_fds=True)` | `os.fork` double-fork | Testable, no shell. |
 | Herdr transport | Socket client first; per-call fallback to CLI argv via `HERDR_BIN_PATH`; 2 s timeouts | CLI only | Cheaper per tick; CLI covers protocol drift. |
@@ -61,13 +61,13 @@ Per file: `{inode, dev, size, offset}`. Inode change or `size < offset` → offs
 ```json
 // sessions/<uuid>.json
 {"v":1,"provider":"claude","last_seen":1760000000.5,"total":125400,
- "files":{"main":{"inode":1,"dev":1,"size":9,"offset":9,"skip":false}},
+ "files":{"main":{"inode":1,"dev":1,"size":9,"offset":9}},
  "ledger":{"msg_01ab":[10,200,0,5000]},"aliases":{"req_01":"msg_01ab"}}
 // published.json
 {"v":1,"seq":1760000000123,"panes":{"<pane_id>":{"session":"<uuid>","value":"125.4k tokens","at":1760000000}}}
 ```
 
-`aliases` maps `requestId` → `message.id` so lines carrying only one of the two keys dedupe together. `skip` marks a tailer position inside an oversized skipped line. `last_seen` is a float epoch. A session is saved only when dirty and before its total is published; a failed save is logged and the total is still shown (re-read is idempotent). Atomic write: temp file in same dir → `fsync` → `os.replace`. Unknown `v` → discard and rebuild from offset 0. Sessions with `last_seen` older than 30 days are pruned at startup and hourly.
+`aliases` maps `requestId` → `message.id` so lines carrying only one of the two keys dedupe together. `skip` (absent normally, `1` only while set) marks a tailer position inside an oversized skipped line. `last_seen` is a float epoch. A session is saved only when dirty and before its total is published; a failed save is logged and the total is still shown (re-read is idempotent). Atomic write: temp file in same dir → `fsync` → `os.replace`. Unknown `v` → discard and rebuild from offset 0. Sessions with `last_seen` older than 30 days are pruned at startup and hourly.
 
 ## Lifecycle
 
@@ -79,7 +79,7 @@ Per file: `{inode, dev, size, offset}`. Inode change or `size < offset` → offs
 - Writes: `HERDR_PLUGIN_STATE_DIR` and Herdr metadata only. Values are rendered from ints.
 - Subprocess: `HERDR_BIN_PATH` (absolute, executable) and `sys.executable`; argv only.
 - Logs: `RotatingFileHandler` 256 KiB×2; event names, counts, exception type, pane id, 8-char session prefix. Never line content, exception messages, or paths.
-- `sidebar_patch`: `--print` renders a diff only; `--apply` (explicit) writes a timestamped backup first; it patches only the Claude row: last row of `rows_by_agent.claude`, else of `rows`; no `[ui.sidebar.agents]` (or no file) → appends a minimal section; any other shape (no rows, inline/dotted forms, invalid TOML, multiline strings) → refuses with manual instructions and exit 1. Edits are text-minimal and verified by re-parsing with `tomllib`. Never called by startup.
+- `sidebar_patch`: `--print` renders a diff only; `--apply` (explicit) writes a timestamped backup first; it adds `$tokens` to the last row of `rows` and of `rows_by_agent.claude` (each when present, idempotent per row) and patches a symlink's target in place (backup next to the target, same mode); it never creates a rows section (that would replace Herdr's default layout), so no file, no `[ui.sidebar.agents]` or no rows → refuses with manual steps naming the given `--config` path (`herdr --default-config`, paste rows, add `$tokens`, re-run `--print`) and exit 1; any other shape (inline/dotted forms, invalid TOML, unreadable file, multiline strings) → refuses likewise. Edits are text-minimal and verified by re-parsing with `tomllib`. Never called by startup.
 
 ## Threat Matrix
 

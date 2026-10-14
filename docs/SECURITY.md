@@ -2,7 +2,7 @@
 
 - Local-first: no network, no telemetry, stdlib only.
 - Inputs are read-only: `~/.claude/projects/*/<uuid>.jsonl` (+ `subagents/`), after UUID validation and `realpath` containment.
-- Writes: the plugin state dir and Herdr pane metadata only. The sidebar patch writes the Herdr config only on explicit `--apply`, after a backup.
+- Writes: the plugin state dir and Herdr pane metadata only. The sidebar patch writes the Herdr config only on explicit `--apply`, after a backup, and only edits an existing config (it never creates one).
 - Subprocesses: argv lists only (`HERDR_BIN_PATH` absolute and executable, `sys.executable`); no shell.
 - Logs hold event names, counts, exception types, pane ids and 8-char session prefixes; never transcript content, exception messages or paths.
 
@@ -18,4 +18,4 @@
 
 - A same-user process can plant symlinks or hardlinks inside the state dir or Claude dirs; same-user is already full trust.
 - PID reuse: a microsecond window remains between reading the pid and signalling it.
-- On slow Herdr, a handoff may wait up to `WAIT_S` (8 s) for the old poller to finish an in-flight call before respawning.
+- On slow Herdr, a handoff may wait up to `WAIT_S` (8 s) for the old poller to finish an in-flight call before respawning. The handoff can fail and leave no poller running: it logs `handoff_failed` and exits 1. Recovery: run `start`.

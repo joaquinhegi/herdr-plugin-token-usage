@@ -81,6 +81,6 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 ## Slice 6: Docs + patch + validation (PR6)
 
 - [x] 6.1 RED `test_sidebar_patch.py`: custom rows + `rows_by_agent.claude` → diff adds only `$tokens`; refuses when no safe minimal edit; `--print` writes nothing.
-- [x] 6.2 GREEN `lifecycle/sidebar_patch.py` (`--apply` writes timestamped backup; never from startup; rule: patch the claude override, else `rows`, else append a minimal section, else refuse). [APPROVAL, user-owned, not run] to run against `~/.config/herdr`.
+- [x] 6.2 GREEN `lifecycle/sidebar_patch.py` (`--apply` writes timestamped backup; never from startup; rule: add `$tokens` to the last row of `rows` and of the claude override when present; never create a rows section: no file/section/rows → refuse with manual steps; symlink target patched in place). [APPROVAL, user-owned, not run] to run against `~/.config/herdr`.
 - [x] 6.3 `README.md` (total definition, inspected dirs, install/reload/log/disable/uninstall) and `docs/SECURITY.md`.
 - [ ] 6.4 [APPROVAL] Manual validation: two simultaneous Claude sessions show independent totals; restart/resume; check absent `$tokens` row.
