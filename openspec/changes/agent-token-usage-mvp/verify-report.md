@@ -422,3 +422,57 @@ Coverage analysis skipped. No coverage tool was detected.
 ### Verdict
 PASS WITH WARNINGS
 All 4 slice-1 requirements and 6/6 scenarios are covered by passing tests (24/24), the build is clean, and the prior CRITICAL is resolved; the remaining warnings are a tracked Codex assumption and a user-approved slice-2 carry-over.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:33268f9fd3b3d1f58c42e0e6590ab0138b4ecc05c1221d2194e0ed814410b4c4
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 3/3
+scenarios: 4/4
+test_command: python3 -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:4b0dd352398e6b7486ec701f4c6be0efe2b1fc412f14166ba9f101a691b3c8cf
+build_command: python3 -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Slice 3a Re-verification (bounded correction faaca54)
+
+**Candidate**: branch `slice-3a-mapping`, HEAD `faaca54` (tree `535aaee`), on `55a1a37`. Diff `git diff 55a1a37 faaca54`: 2 files, +48/-13 (`src/token_usage/adapters/claude_locator.py`, `tests/adapters/test_claude_locator.py`).
+**Scope**: Confirms the prior slice-3a findings and looks only for regressions introduced by the correction. This is not a fresh full-slice audit. Under the single-correction rule, new non-critical observations are carry-overs.
+**Evidence revision**: sha256 over `tree:535aaeeeb51b11194b790d27002415d863f47fcf\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`.
+
+### Build & Tests
+- Tests: `python3 -m unittest discover`, exit 0, `Ran 71 tests`, OK (67 prior plus 4 new locator tests).
+- Build: `python3 -m compileall -q src tests`, exit 0, empty output.
+
+### Prior Findings
+| Finding | Status | Evidence |
+|---|---|---|
+| W1: traversal test not discriminating | RESOLVED | `test_claude_locator.py:71-80` creates a real file for each bad input. Mutation in a scratch copy (UUID guard removed, `isinstance` kept): 5 subtests FAIL (`..`, `*`, `A.upper()`, `A+"x"`, `""`). `../outside/x` and `-proj/secret` still pass because the new basename check (`claude_locator.py:38`) also rejects them (defense in depth, see S-a). |
+| W2: check-to-use gap and in-root `<A>.jsonl -> <B>.jsonl` | RESOLVED | `_resolve` (`claude_locator.py:23-25`) returns the realpath only when it is inside the resolved root and is a file. The main is accepted only if the resolved basename equals `<uuid>.jsonl` (`:38`). Subagents are accepted only if the resolved path matches `agent-*.jsonl` under `<uuid>/subagents` (`:49`). `Located` now holds resolved paths. Tests: `test_in_root_main_symlink_to_other_session_is_none` (:86), `test_in_root_subagent_symlink_to_other_session_is_dropped` (:92). Verifier probes: a symlinked `<A>` dir pointing to `<B>` gives 0 subagents; a symlinked `<A>/subagents` pointing to `<B>/subagents` gives 0 subagents; an in-root project-dir alias or a main symlink to another project's `<A>.jsonl` gives None (ambiguous, fail-closed). Hardlinks are out of scope (same-user write access, indistinguishable from a regular file). |
+| W3: stale apply-progress | RESOLVED | Engram #159 (`sdd/agent-token-usage-mvp/apply-progress`) records `3050589`, `faaca54`, 71 tests, +48/-13, the `agent-*.jsonl` glob, resolved-path semantics, and TDD rows for each correction (W1 mutation result matches the verifier's 5 failing subtests). |
+| S1: `locate(None)` raised `TypeError` | RESOLVED | `claude_locator.py:28` `isinstance` guard; `test_non_str_session_id_is_none` (:82) covers None and int. |
+| S4: subagents collected inside the loop | RESOLVED | Subagents are collected after the single-match check (`claude_locator.py:40-50`); `test_ambiguous_does_not_leak_subagents` (:101). |
+| S2, S3 | OPEN (not in scope) | Log-on-change (slice 4) and UUID casing note unchanged. |
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING** (carry-over, non-blocking):
+1. Duplicate subagent paths. `claude_locator.py:47-50` does not deduplicate resolved paths. Probe: `<A>/subagents/agent-dup.jsonl -> agent-a.jsonl` in the same directory returns `agent-a.jsonl` twice. A consumer that tails each entry would count that transcript twice. Before the correction the list held two different paths to the same file, so the double count is not new, but resolving paths now makes the fix trivial: skip a `real` already in `subs` (or use a dict keyed by path). It needs same-user write access, and Claude Code does not create such links. Fix before slice 4 consumes `Located.subagents`.
+
+**SUGGESTION** (carry-over):
+1. (S-a) Subagent ownership is checked by directory names only (`claude_locator.py:49`). Probe: `-p/<A>/subagents -> -q/x/<A>/subagents` is accepted, because the target is still named `<A>/subagents`. That is the same session id, so nothing is attributed to another session. A stricter check would be `real.parent.parent == Path(os.path.realpath(project / session_id))`. Similarly, a main symlink to a non-project file named `<A>.jsonl` (for example `-p/nested/<A>.jsonl`) is accepted. That is acceptable under the same-session rule.
+2. (S-b) An in-root alias of a project directory (or a main symlink to another project's `<A>.jsonl`) makes `mains` hold the same resolved file twice, so the result is "ambiguous" (None) even though only one transcript exists. This fails closed and is unchanged from before the correction. Deduplicating `mains` by resolved path would avoid hiding a figure.
+3. (S-c) Two of the seven traversal subtests (`../outside/x`, `-proj/secret`) are now guarded by the basename check, not only the UUID gate. That is fine, but the test comment at `test_claude_locator.py:75` ("each would resolve to a real file without the UUID guard") overstates what those two subtests prove.
+
+### Regressions Introduced by the Correction
+None found. Resolved paths are always under `root_real`, matching the prior behavior where project paths came from `root_real.iterdir()`. No consumer of `Located` exists yet in `src/` (slice 3b/4).
+
+### Verdict
+PASS WITH WARNINGS
+W1, W2, W3, S1 and S4 are resolved and 71/71 tests pass. The UUID gate is now load-bearing, and the locator returns resolved, uuid-named paths that cannot be redirected to another session's main or subagent transcripts. One carry-over WARNING remains: deduplicate resolved subagent paths before slice 4 consumes them.
