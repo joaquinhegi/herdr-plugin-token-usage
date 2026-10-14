@@ -43,7 +43,7 @@ def reconcile(previous: dict, desired: dict, now: float, now_ms: int) -> tuple[l
         session, total = want
         value = format_tokens(total)
         if prev and prev.get("session") == session and prev.get("value") == value \
-                and now - prev.get("at", 0) < REFRESH_S:
+                and 0 <= now - prev.get("at", 0) < REFRESH_S:
             panes[pane_id] = dict(prev)
             continue
         actions.append(Publish(pane_id, value, next_seq()))

@@ -26,6 +26,12 @@ class ReconcileTest(unittest.TestCase):
     def run_it(self, prev, desired, now=NOW, now_ms=NOW_MS):
         return reconcile(prev, desired, now, now_ms)
 
+    def test_negative_age_counts_as_stale_and_refreshes(self):
+        """Clock went backwards (now < at): refresh instead of trusting a future stamp."""
+        actions, new = self.run_it(state(p1=entry(at=NOW + 50, value="1.2k tokens")), {"p1": (S1, 1200)})
+        self.assertEqual([type(a) for a in actions], [Publish])
+        self.assertEqual(new["panes"]["p1"]["at"], NOW)
+
     def test_constants(self):
         self.assertEqual((REFRESH_S, TTL_MS), (20, 60000))
 

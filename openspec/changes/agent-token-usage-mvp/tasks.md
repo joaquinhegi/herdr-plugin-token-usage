@@ -60,7 +60,7 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 
 ## Slice 4a: Reconcile + carry-overs (PR4a)
 
-- [x] 4.1 RED `test_reconcile.py`: publish on change, refresh ≥20 s, clear on None/close/session change, never 0, seq monotonic `max(last+1, time_ns//1e6)`.
+- [x] 4.1 RED `test_reconcile.py`: publish on change, refresh ≥20 s, clear on None/session change (closed panes are forgotten, no clear), never 0, seq monotonic `max(last+1, time_ns//1e6)`.
 - [x] 4.2 GREEN `domain/reconcile.py`.
 - [x] 4.0a Carry-over (locator): dedupe resolved subagent paths and resolved mains (in-root project-dir alias is not ambiguous).
 - [x] 4.0b Carry-over (tailer): after the max_fragment+1 window, consume only through the first newline.
