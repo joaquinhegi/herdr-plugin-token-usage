@@ -32,7 +32,7 @@ The plugin MUST publish `tokens` under a fixed local source only when the value 
 - THEN the CLI fallback is tried and failure is logged without crashing
 
 ### Requirement: Approval-gated config patch (RF04, C14)
-The plugin MUST NOT auto-edit `~/.config/herdr/config.toml`. It MUST provide a minimal reversible patch with backup and diff, adding `$tokens` to `rows` and any `rows_by_agent` overrides without duplicating tables or dropping custom rows.
+The plugin MUST NOT auto-edit `~/.config/herdr/config.toml`. It MUST provide a minimal reversible patch with backup and diff, adding `$tokens` to `rows` and to the Claude override (`rows_by_agent.claude`) only (Claude-only MVP; other agents' overrides are left untouched), without duplicating tables or dropping custom rows.
 
 #### Scenario: Custom sidebar
 - GIVEN a config with custom rows and `rows_by_agent.claude`

@@ -44,6 +44,28 @@ class Base(unittest.TestCase):
 
 
 class TestPlan(Base):
+    def test_tokens_in_any_row_is_noop(self):
+        self.write('[ui.sidebar.agents]\nrows = [["agent", "$tokens"], ["cwd"]]\n')
+        res = sp.plan(self.cfg)
+        self.assertEqual((res.status, res.new_text), ("noop", ""))
+
+    def test_tokens_in_any_row_noop_is_independent_per_target(self):
+        self.write('[ui.sidebar.agents]\nrows = [["agent", "$tokens"], ["cwd"]]\n\n'
+                   '[ui.sidebar.agents.rows_by_agent]\nclaude = [["agent"], ["cwd"]]\n')
+        res = sp.plan(self.cfg)
+        self.assertEqual(res.status, "patch")
+        self.assertEqual(added(res.diff), ['claude = [["agent"], ["cwd", "$tokens"]]'])
+
+    def test_non_table_agents_refuses_without_traceback(self):
+        self.write("[ui.sidebar]\nagents = 1\n")
+        self.assertEqual(sp.plan(self.cfg).status, "refuse")
+
+    def test_manual_steps_say_uncomment_and_check(self):
+        self.write("[ui]\ntheme = 'x'\n")
+        msg = sp.plan(self.cfg).message
+        for needle in ("uncomment", "herdr config check", "reload"):
+            self.assertIn(needle, msg.lower())
+
     def test_custom_claude_row_only_adds_tokens(self):
         text = self.write(CUSTOM.split("\n\n")[1])  # no top-level rows: only the override
         text = self.write("[ui.sidebar.agents]\nspacing = 1\n\n" + text)
@@ -211,6 +233,20 @@ class TestCli(Base):
         self.assertIn("manual", r.stderr.lower())
         for args in ((), ("--print", "--apply"), ("--config", str(self.cfg))):
             self.assertEqual(self.run_cli(*args).returncode, 2)
+
+    def test_non_table_agents_cli_exit_1_no_traceback(self):
+        self.write("[ui.sidebar]\nagents = 1\n")
+        r = self.run_cli("--print", "--config", str(self.cfg))
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_default_config_honors_herdr_config_path(self):
+        self.write(ROWS_ONLY)
+        env = {"PATH": os.environ["PATH"], "HOME": str(self.dir / "nohome"), "HERDR_CONFIG_PATH": str(self.cfg)}
+        r = subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", "--print"], env=env,
+                           capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("$tokens", r.stdout)
 
     def test_directory_config_is_short_error_not_traceback(self):
         r = self.run_cli("--apply", "--config", str(self.dir))

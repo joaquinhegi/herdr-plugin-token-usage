@@ -84,3 +84,13 @@ Rules: STRICT TDD (RED → GREEN → REFACTOR per task). Fixtures synthetic only
 - [x] 6.2 GREEN `lifecycle/sidebar_patch.py` (`--apply` writes timestamped backup; never from startup; rule: add `$tokens` to the last row of `rows` and of the claude override when present; never create a rows section: no file/section/rows → refuse with manual steps; symlink target patched in place). [APPROVAL, user-owned, not run] to run against `~/.config/herdr`.
 - [x] 6.3 `README.md` (total definition, inspected dirs, install/reload/log/disable/uninstall) and `docs/SECURITY.md`.
 - [ ] 6.4 [APPROVAL] Manual validation: two simultaneous Claude sessions show independent totals; restart/resume; check absent `$tokens` row.
+
+## Slice 6b: Hardening carry-overs
+
+- [x] 6b.1 R1 sidebar idempotence: a row set already containing `$tokens` in any row is a no-op (per `rows` and per claude override).
+- [x] 6b.2 W1-R spec delta: `$tokens` goes to `rows` and `rows_by_agent.claude` only (Claude-only MVP).
+- [x] 6b.3 W3-R/S-R2 README + manual-steps text: Disable runs `stop` first; shell fallback needs `HERDR_PLUGIN_STATE_DIR`; uncomment `--default-config` lines, `herdr config check`, reload.
+- [x] 6b.4 S-R1: non-table `ui.sidebar.agents` refuses cleanly (exit 1, no traceback).
+- [x] 6b.5 W-R1: `TickService.should_stop` checked per session and per publish action; poller wires `is_stopping`; stop during a slow tick ends `run()` fast.
+- [x] 6b.6 State store: orphan `*.tmp` sweep (>1 h) in prune, best-effort parent-dir fsync, file-key allowlist (`main`, `subagents/agent-*.jsonl`), no duplicate log handler.
+- [x] 6b.7 S-R4: default config path honors `HERDR_CONFIG_PATH` (documented in `herdr --help`).

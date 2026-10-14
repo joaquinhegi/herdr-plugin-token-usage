@@ -1,7 +1,7 @@
 """Print-first, minimal sidebar patch: adds `$tokens` to existing agent rows only.
 
 Rule: extend the last row of `ui.sidebar.agents.rows` and of `rows_by_agent.claude` (each when
-present, idempotent per row). It never creates a rows section (that would replace Herdr's
+present, a row set already containing `$tokens` anywhere is left alone). It never creates a rows section (that would replace Herdr's
 default layout): with no config or no `[ui.sidebar.agents]` rows it REFUSES with manual steps.
 Every edit is verified by re-parsing with tomllib. Never called by startup.
 """
@@ -23,10 +23,10 @@ HEADER = re.compile(r"^\s*\[([\w. -]+)\]\s*(#.*)?$")
 
 def _manual(path: Path, why: str) -> str:
     return (
-        f"{why}\nNothing was changed. Manual steps for {path}: if it has no [ui.sidebar.agents] rows, run\n"
-        "`herdr --default-config` (or copy Herdr's default [ui.sidebar.agents] rows) and paste the rows\n"
-        'into that file; add "$tokens" to the agent row, e.g. ["agent", "$tokens"]; then re-run\n'
-        "`sidebar-patch --print`.\n"
+        f"{why}\nNothing was changed. Manual steps for {path}: run `herdr --default-config`, copy its\n"
+        "[ui.sidebar.agents] section and rows into that file and uncomment those lines (they ship commented\n"
+        'out); add "$tokens" to the agent row, e.g. ["agent", "$tokens"]; run `herdr config check`; reload\n'
+        "the config (`herdr server reload-config`); then re-run `sidebar-patch --print`.\n"
     )
 
 
@@ -106,6 +106,8 @@ def plan(path: Path) -> Plan:
         agents = data["ui"]["sidebar"]["agents"]
     except (KeyError, TypeError):
         return _refuse("No [ui.sidebar.agents] section found.", path)
+    if not isinstance(agents, dict):
+        return _refuse("[ui.sidebar] agents is not a table.", path)
     by_agent = agents.get("rows_by_agent")
     found = [("ui.sidebar.agents", "rows", agents.get("rows")) if "rows" in agents else None,
              ("ui.sidebar.agents.rows_by_agent", "claude", by_agent["claude"])
@@ -114,7 +116,7 @@ def plan(path: Path) -> Plan:
     if not targets or any(not isinstance(r, list) or not r or not all(isinstance(x, list) for x in r)
                           for _, _, r in targets):  # shape unknown
         return _refuse("No usable row layout found in [ui.sidebar.agents].", path)
-    todo = [(t, k) for t, k, r in targets if "$tokens" not in r[-1]]
+    todo = [(t, k) for t, k, r in targets if not any("$tokens" in row for row in r)]
     if not todo:
         return Plan("noop", message="$tokens is already present.\n")
     spots = [_locate(text, t, k) for t, k in todo]
@@ -177,7 +179,8 @@ def main(args: list[str]) -> int:
     if len(flags) != 1 or (rest and not (len(rest) == 2 and rest[0] == "--config")):
         print("usage: main.py sidebar-patch --print|--apply [--config PATH]", file=sys.stderr)
         return 2
-    path = Path(rest[1]) if rest else Path.home() / ".config" / "herdr" / "config.toml"
+    env_path = os.environ.get("HERDR_CONFIG_PATH")
+    path = Path(rest[1]) if rest else Path(env_path) if env_path else Path.home() / ".config" / "herdr" / "config.toml"
     if flags[0] == "--apply":
         return apply(path)
     return _emit(plan(path))
