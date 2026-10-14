@@ -24,3 +24,13 @@ class TailResult(Protocol):
 
 class Tailer(Protocol):
     def read(self, path: Path, position: dict[str, int] | None) -> TailResult: ...
+
+
+class HerdrError(Exception):
+    """Any failure talking to Herdr (spawn, timeout, protocol, bad input)."""
+
+
+class HerdrPort(Protocol):
+    def list_panes(self) -> list[dict[str, Any]]: ...
+    def report(self, pane_id: str, source: str, token: str, value: str, seq: int, ttl_ms: int) -> None: ...
+    def clear(self, pane_id: str, source: str, token: str, seq: int) -> None: ...
