@@ -1524,3 +1524,105 @@ RED (10 failures, 1 error) and then GREEN (183) are recorded in apply-progress #
 PASS WITH WARNINGS
 
 183/183 tests pass and the build is clean. C1, W2, W4, W5, W6, S2 and S5 are resolved, with runtime and mutation evidence (M1 is now killed, the E1 symlink case is fixed, and no path creates a rows section). W1 and W3 are partially resolved: the residuals are spec text drift and the disable/stop wording. One new non-critical regression (R1, duplicated `$tokens` when it sits in a non-last row) is carried over under the single-correction rule. The user-owned items 5.3a and 6.4, plus W7 and W-R1, remain open.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:2f892d545e5ccfc2d416498034e741c9792412cd73f95c6f018f272cc58410c8
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 7/7
+scenarios: 8/8
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:112793f98858f96d82fe2299e0cb96e3c87d5d4d9e0e2cd2cdeba04b3e755d83
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report (slice 6b: hardening carry-overs)
+
+**Change**: agent-token-usage-mvp
+**Candidate**: `git diff slice-6-docs slice-6b-hardening` (1a30ca4..801fbd0; commits 8d66f0a, 5949146, 801fbd0; 14 files, +179/-20). `evidence_revision` is the SHA-256 of that diff.
+**Mode**: Strict TDD (`openspec/config.yaml:9`).
+**Method**: The tests, build, mutations and experiments ran in a `git archive slice-6b-hardening` copy under the session scratchpad with Homebrew Python 3.14.8 (`python3 -B`, no `__pycache__`). The repository was not modified (`git status --short` is empty). The real herdr binary ran only with `--help`, `config --help` and `server --help`; its embedded default config was read with `rg -a` on the binary. No real socket, no `~/.config/herdr`, no `~/.claude/projects`, no network, and no plugin link/enable were used. Every daemon used a temp HOME, a temp state directory, a fake herdr bin and a nonexistent socket. Final `pgrep -fl "src/main.py"`: no output (exit 1).
+**Scope of counts**: 7 requirements and 8 scenarios touched by slice 6b. Sidebar-metadata: Approval-gated config patch (Custom sidebar). Plugin-lifecycle: Single detached poller (Handoff re-run); Stop and status (Stop); Least privilege (Content never stored); Uninstall and documentation (Uninstall). Usage-accounting: State and retention (Pruning); Incremental tail (Growing file, Truncation). The full change has 17 requirements and 26 scenarios; earlier slice reports verified the rest.
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Tasks total (tasks.md) | 42 |
+| Tasks complete | 40 (including 6b.1 to 6b.7) |
+| Tasks incomplete | 2, both user-owned [APPROVAL]: 5.3a (link/enable) and 6.4 (manual validation) |
+| 6.2 | Checked. Its "[APPROVAL, user-owned, not run] against `~/.config/herdr`" note is still accurate. |
+
+### Build and tests
+- Tests: `python3 -B -m unittest discover` gives `Ran 195 tests ... OK` (exit 0).
+- Build: `python3 -B -m compileall -q src tests` exits 0 with empty output (scratch copy only).
+- RED reproduced: the slice-6b tests run against the slice-6-docs source give `FAILED (failures=19, errors=2)` from 195 tests. This matches the apply-progress claim (#159).
+- Coverage: not available (stdlib only).
+
+### Carry-over resolution
+| Item | Status | Evidence |
+|---|---|---|
+| R1 (6a): any-row idempotence | RESOLVED | `sidebar_patch.py:119` is a no-op when any row of a target already has `$tokens`, and each target is evaluated separately (`test_tokens_in_any_row_is_noop`, `test_tokens_in_any_row_noop_is_independent_per_target`). Runtime check: `--apply` twice with `HERDR_CONFIG_PATH` on a config where the claude override already had `$tokens` in a non-last row. The first run patched only `rows` and left `codex` untouched; the second printed "$tokens is already present." and wrote one backup. Mutant M1 (back to last-row only) is KILLED. |
+| W1-R (6a): spec delta | RESOLVED | `specs/sidebar-metadata/spec.md:35` now says `rows` and `rows_by_agent.claude` only, which matches `sidebar_patch.py:112-114`. |
+| W3-R (6a): disable/uninstall docs | PARTIAL | README.md:36 (Disable) now runs `stop` first and gives a correct shell fallback with `HERDR_PLUGIN_STATE_DIR`. README.md:37 (Uninstall) still says `(or python3 -B src/main.py stop)` without that variable, and that command exits 2 under `env -i` ("HERDR_PLUGIN_STATE_DIR and HERDR_BIN_PATH must be set"). The unverified claim "Herdr removes the plugin files" was removed. See W-6b-2. |
+| S-R1 (6a): non-table `agents` | RESOLVED | `sidebar_patch.py:109-110`. The CLI with `[ui.sidebar]\nagents = 1` exits 1, prints manual steps and no traceback. M2 is KILLED. A non-table `rows_by_agent` was already ignored (`:113-114`). |
+| S-R2 (6a): manual-steps text | RESOLVED | `sidebar_patch.py:24-30` and README.md:31 now say to uncomment, run `herdr config check`, then `herdr server reload-config`. `herdr config --help` lists `check`, and `herdr server --help` lists `reload-config`. The binary ships `# [ui.sidebar.agents]`, `# rows = [["state_icon", "workspace", "tab"], ["agent"]]` and `# claude = [...]` commented out, so "uncomment" is accurate. M4 is KILLED. |
+| S-R4 (6a): `HERDR_CONFIG_PATH` | RESOLVED | `sidebar_patch.py:182-183`. `herdr --help` line 62 says "Env: HERDR_CONFIG_PATH overrides config file path", and `herdr --help` with that variable set shows the overridden `Config:` path. An empty value falls back to the default, as verified. M3 is KILLED. |
+| W-R1 (slice 5): handoff during an in-flight tick | RESOLVED | `tick.py:36-39` checks the stop flag per session and `tick.py:46-60` per action. `main.py:42-44` wires `poller.is_stopping` (`daemon.py:99-100`). I re-ran E2-grow with a real daemon, 4 panes, a fake herdr at 1.9 s per call, all transcripts grown, and a handoff 4.5 s later. Before the fix it returned `failed` with rc 1 after 8.2 s. Now it returns `restarted` with rc 0 after 6.1 s, the old tick stopped after p3, cleanup cleared p1 and p2 and then hit `cleanup_deadline`, and the new daemon is `running`. Mutants M6 and M15 are KILLED. |
+| #161 S1: tmp sweep | RESOLVED | `state_store.py:96-102` removes `*.tmp` files older than 1 h in the state root and in `sessions/`. M10 and M11 are KILLED. On concurrency, see Regression checks. |
+| #161 S2: parent-dir fsync | RESOLVED | `state_store.py:25-33,53`, best effort. M9 is KILLED. |
+| #161 S3: file-key allowlist | RESOLVED, with a regression (W-6b-1) | `state_store.py:15,19-22` rejects `""`, `.`, `~`, absolute paths and nested paths (`test_file_key_allowlist`). M12 (old check) is KILLED. M13 (dropping `".." in key`) is equivalent, because the regex cannot match a `/` after `agent-`. |
+| #161 S5: duplicate log handler | RESOLVED | `log.py:17-18`. M14 is KILLED. See S-6b-1 for the different-directory case. |
+
+### Regression checks
+- **File-key allowlist and existing writers.** `tick.py:85-86` builds keys as `subagents/{p.name}` for every file that `claude_locator.py:58` matches with `agent-*.jsonl`. That glob accepts characters the allowlist rejects: spaces, `+`, `@`, non-ASCII. I probed this in the scratch copy with fake herdr and temp dirs. With a subagent named `agent-a b.jsonl`, `save_session` raised `ValueError` on every tick, the session was never saved, every tick re-read all files from offset `None`, and `save_session_failed` was logged every tick. Loading old state that contains a now-disallowed key does not crash (`load_session` does not validate). However, `tick.py:84` carries every saved key forward, so the stale key makes the session permanently unsaveable even after its file is gone. When a transcript is larger than one tick's read cap, the total stays stuck: with `max_read=300` the display stayed at "250 tokens", against "1.1k tokens" for the same data with an allowed name. This is a real, candidate-caused regression. Known Claude subagent names (`agent-<hex>`) match the allowlist, so the risk is low. See W-6b-1.
+- **`make_logger` with the same name and a different directory.** The probe confirms that it silently keeps logging to the first directory. The second directory is created but gets no log. Production calls it once per process with one state directory (`main.py:38`), and `_log_failed_handoff` closes the logger (`main.py:98-100`), so there is no live impact. See S-6b-1.
+- **Tmp sweep and concurrent writers.** No realistic race. Every writer of `*.tmp` (`state_store.py:46`, `daemon.py:75`) is the single flock-holding poller, and prune runs sequentially in the same loop (`daemon.py:133-135`). `mkstemp` gives a fresh mtime and the file is replaced within milliseconds, so only a writer stalled for more than 1 h could lose its tmp file. Even then, `os.replace` would raise, the error is caught (`state_store.py:54-56`) and logged by the caller, and the next tick retries. `status`/`stop`/`start` do not write state tmp files. `sidebar_patch` tmp files live next to the config, not in the state dir.
+- **`should_stop` and unapplied actions.** Correct. An interrupted action restores the old record or drops the new pane (`tick.py:57-60`), so `published.json` reflects only applied actions (`test_stop_between_publish_actions_keeps_unapplied_for_retry`, and M7 is KILLED). An abort during the session loop returns before `save_published`, so the previous published state stays intact. `_cleanup` then clears what was actually published: E2-grow showed p1 and p2 cleared. p3, published by the interrupted tick, was not cleared because the 3 s cleanup budget ran out first. That is the pre-existing cleanup-budget residual, and the 60 s TTL covers it.
+- **Sidebar per-row-set idempotence and manual steps.** Correct and accurate, as covered above.
+
+### Spec compliance matrix (slice scope)
+| Requirement | Scenario | Test | Result |
+|---|---|---|---|
+| Approval-gated config patch | Custom sidebar | `test_sidebar_patch > test_custom_claude_row_only_adds_tokens`, `test_tokens_in_any_row_noop_is_independent_per_target`, `test_backup_then_atomic_replace` | COMPLIANT |
+| Single detached poller | Handoff re-run | `test_daemon > test_second_run_exits_zero_without_ticking`, `test_stop_request_during_slow_tick_ends_run_within_bound`, plus the E2-grow runtime | COMPLIANT |
+| Stop and status actions | Stop | `test_daemon > test_stop_clears_published_persists_and_removes_pidfile`, `test_tick > test_stop_between_publish_actions_keeps_unapplied_for_retry` | COMPLIANT |
+| Least privilege and safe logging | Content never stored | `test_log > test_sentinel_never_reaches_state_or_logs`, `test_tick > test_content_and_paths_never_reach_state_or_logs`, `test_state_store > test_file_key_allowlist` | COMPLIANT |
+| Uninstall and documentation | Uninstall | `test_sidebar_patch > test_backup_then_atomic_replace`, `test_apply_missing_file_refuses_and_second_run_is_noop` (the README.md:37 text residual is W-6b-2) | COMPLIANT |
+| State and retention | Pruning | `test_state_store > test_prune_removes_sessions_older_than_30_days`, `test_prune_sweeps_only_old_orphan_tmp_files`; `test_daemon > test_prune_at_startup_and_hourly` | COMPLIANT |
+| Incremental tail | Growing file | `test_tick > test_total_grows_after_new_lines` (the edge case with disallowed names is W-6b-1) | COMPLIANT |
+| Incremental tail | Truncation | `test_tail_ledger_integration > test_truncation_rescan_does_not_double_count`, `test_jsonl_tail > test_truncate_rescans_from_start` | COMPLIANT |
+
+**Compliance summary**: 8/8 scenarios compliant.
+
+### Mutation summary (16 mutants, full suite)
+- KILLED (12): M1 last-row idempotence, M2 no non-table guard, M3 ignore `HERDR_CONFIG_PATH`, M4 no "uncomment", M6 no per-action stop check, M7 interrupted action not restored, M9 no parent fsync, M10 sweep fresh tmp files, M11 sweep `sessions/` only, M12 old relative-key check, M14 duplicate handler, M15 `is_stopping` always False.
+- SURVIVED (4): M5 (no per-session stop check: the test cannot tell it apart, S-6b-2), M8 (`main.py:44` wiring removed: untested, but E2-grow proves the wiring at runtime, S-6b-3), M13 (equivalent), M16 (InterruptedError logged: untested, S-6b-4).
+
+### Whole-change sanity pass
+- README.md:11 says Python >= 3.11, which matches `main.py:5-7`. README.md:31 matches `sidebar_patch.py`. README.md:36 is correct. README.md:37 has the residual in W-6b-2. README.md:7 "writes only its state dir and Herdr pane metadata" leaves out the explicit `--apply` config write, but SECURITY.md:5 covers it.
+- SECURITY.md:14 "atomic state writes" is now stronger with the parent fsync. SECURITY.md:21 (a handoff can fail) is still a valid residual but is now narrower: E2-grow succeeds. SECURITY.md:20 (pid-reuse window) is unchanged and accurate.
+- tasks.md: the only open items are 5.3a and 6.4, both user-owned [APPROVAL]. 6.2 is checked with an accurate "not run against `~/.config/herdr`" note.
+
+### Issues found
+**CRITICAL**: None.
+
+**WARNING**:
+- W-6b-1 (new, candidate-caused): the file-key allowlist (`state_store.py:15,19-22`) is narrower than the locator glob (`claude_locator.py:58`) and the key builder (`tick.py:85-86`). One subagent file whose name contains a character outside `[A-Za-z0-9_.-]`, or one stale key from older state (carried forward by `tick.py:84`), makes `save_session` fail on every tick. Offsets and ledger never persist, every tick re-reads from the old offsets and logs `save_session_failed`, and a transcript larger than the read cap shows a permanently low total (probe: 250 vs 1.1k tokens). This is unreachable with known Claude naming. Fix options: skip disallowed subagent names in the locator or in tick (log once), and drop `files` keys that are not in the current `paths`.
+- W-6b-2 (W3-R residual): README.md:37 still offers `python3 -B src/main.py stop` without `HERDR_PLUGIN_STATE_DIR`, and that exits 2. Reuse the wording from :36.
+- W7 (carried): apply-progress #159 has no TDD Cycle Evidence table (no TRIANGULATE or SAFETY NET columns). The RED/GREEN claim itself was reproduced (19 failures + 2 errors, then 195 OK).
+
+**SUGGESTION**:
+- S-6b-1: `log.py:17-18` returns a logger bound to the first directory when it is called again with the same name and a different directory. Compare the handler's `baseFilename` and replace the handler when it differs. There is no production impact today.
+- S-6b-2: `test_stop_during_sessions_aborts_tick_without_publishing` should assert that no transcript was read (for example, with `CountingTail.reads == []`) so that it kills M5.
+- S-6b-3: add a test that `_build_poller` wires `svc.should_stop` to `poller.is_stopping` (kills M8).
+- S-6b-4: `tick.py:49,55` uses the built-in `InterruptedError` as a control signal. A real EINTR `OSError` from herdr would then go unlogged, and M16 survives. Use a private exception or break out of the loop.
+- S-6b-5 (carried, slice 5 S-R2, out of 6b scope): `main.py:99` still logs `cmd="start/stop"`, which the sanitizer turns into `cmd=?`.
+- S-6b-6 (pre-existing): when the 3 s cleanup budget runs out, panes published by the interrupted tick are left to the 60 s TTL (E2-grow: p3). Consider mentioning this next to SECURITY.md:21.
+
+### Verdict
+PASS WITH WARNINGS. All 6b carry-overs are resolved with runtime and mutation evidence, except the README.md:37 residual. The suite passes 195/195, and E2-grow (W-R1) no longer reproduces. One new low-likelihood regression from the file-key allowlist (W-6b-1) should be fixed or accepted before archive. 5.3a and 6.4 remain user-owned.
