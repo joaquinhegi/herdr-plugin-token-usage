@@ -69,11 +69,40 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(len(self.log_lines()), 1)
 
     def test_non_uuid_and_traversal_are_none(self):
-        self.touch("-proj", "secret.jsonl")
         self.touch("-proj", f"{A}.jsonl")
-        for bad in ("../outside/x", "..", "-proj/secret", "*", A.upper(), A + "x", ""):
+        bad_inputs = ("../outside/x", "..", "-proj/secret", "*", A.upper(), A + "x", "")
+        for bad in bad_inputs:  # each would resolve to a real file without the UUID guard
+            self.touch("-proj", f"{bad}.jsonl")
+        self.touch("outside", "x.jsonl")
+        self.touch("-proj", "-proj", "secret.jsonl")
+        for bad in bad_inputs:
             with self.subTest(bad=bad):
                 self.assertIsNone(self.locator.locate(bad))
+
+    def test_non_str_session_id_is_none(self):
+        self.assertIsNone(self.locator.locate(None))
+        self.assertIsNone(self.locator.locate(123))
+
+    def test_in_root_main_symlink_to_other_session_is_none(self):
+        b = self.touch("-proj", f"{B}.jsonl")
+        os.symlink(b, self.root / "-proj" / f"{A}.jsonl")
+        self.assertIsNone(self.locator.locate(A))
+        self.assertEqual(self.locator.locate(B).main, b)
+
+    def test_in_root_subagent_symlink_to_other_session_is_dropped(self):
+        main = self.touch("-proj", f"{A}.jsonl")
+        ok = self.touch("-proj", A, "subagents", "agent-a.jsonl")
+        other = self.touch("-proj", B, "subagents", "agent-y.jsonl")
+        os.symlink(other, ok.parent / "agent-x.jsonl")
+        got = self.locator.locate(A)
+        self.assertEqual(got.main, main)
+        self.assertEqual(got.subagents, [ok])
+
+    def test_ambiguous_does_not_leak_subagents(self):
+        self.touch("-p1", f"{A}.jsonl")
+        self.touch("-p2", f"{A}.jsonl")
+        self.touch("-p2", A, "subagents", "agent-a.jsonl")
+        self.assertIsNone(self.locator.locate(A))
 
     def test_main_symlink_escaping_root_is_none(self):
         target = self.touch("real.jsonl", base=self.outside)

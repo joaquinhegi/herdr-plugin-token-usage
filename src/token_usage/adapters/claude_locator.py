@@ -20,26 +20,32 @@ class ClaudeLocator:
         self.root = Path(projects_root)
         self.logger = logger
 
-    def _contained(self, path: Path, root_real: Path) -> bool:
-        return Path(os.path.realpath(path)).is_relative_to(root_real)
+    def _resolve(self, path: Path, root_real: Path) -> Path | None:
+        real = Path(os.path.realpath(path))
+        return real if real.is_relative_to(root_real) and real.is_file() else None
 
     def locate(self, session_id: str) -> Located | None:
-        if not UUID.fullmatch(session_id):
+        if not isinstance(session_id, str) or not UUID.fullmatch(session_id):
             return None
         root_real = Path(os.path.realpath(self.root))
-        mains, subs = [], []
+        mains = []
         try:
             projects = sorted(p for p in root_real.iterdir() if p.is_dir())
         except OSError:
             projects = []
         for project in projects:
-            main = project / f"{session_id}.jsonl"
-            if main.is_file() and self._contained(main, root_real):
-                mains.append(main)
-                sub_dir = project / session_id / "subagents"
-                if sub_dir.is_dir():
-                    subs = [f for f in sorted(sub_dir.glob("agent-*.jsonl")) if f.is_file() and self._contained(f, root_real)]
+            main = self._resolve(project / f"{session_id}.jsonl", root_real)
+            if main and main.name == f"{session_id}.jsonl":
+                mains.append((project, main))
         if len(mains) != 1:
             log_event(self.logger, "locate_failed", reason="ambiguous" if mains else "missing", matches=len(mains))
             return None
-        return Located(mains[0], subs)
+        project, main = mains[0]
+        subs = []
+        sub_dir = project / session_id / "subagents"
+        if sub_dir.is_dir():
+            for f in sorted(sub_dir.glob("agent-*.jsonl")):
+                real = self._resolve(f, root_real)
+                if real and real.match("agent-*.jsonl") and real.parent.name == "subagents" and real.parent.parent.name == session_id:
+                    subs.append(real)
+        return Located(main, subs)
