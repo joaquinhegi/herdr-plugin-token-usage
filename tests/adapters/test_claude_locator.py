@@ -45,6 +45,16 @@ class LocatorTest(unittest.TestCase):
         self.assertEqual(self.locator.locate(A).main, a)
         self.assertEqual(self.locator.locate(B).main, b)
 
+    def test_subagents_are_read_next_to_the_resolved_main(self):
+        """Main symlinked -p -> -q inside root: only -q's subagents belong to the session."""
+        real = self.touch("-q", f"{A}.jsonl")
+        (self.root / "-p").mkdir()
+        (self.root / "-p" / f"{A}.jsonl").symlink_to(real)
+        good = self.touch("-q", A, "subagents", "agent-a.jsonl")
+        self.touch("-p", A, "subagents", "agent-z.jsonl")
+        got = self.locator.locate(A)
+        self.assertEqual((got.main, got.subagents), (real, [good]))
+
     def test_subagents_are_included_and_other_sessions_are_not(self):
         main = self.touch("-proj", f"{A}.jsonl")
         s1 = self.touch("-proj", A, "subagents", "agent-a.jsonl")
