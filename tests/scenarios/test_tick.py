@@ -252,6 +252,7 @@ class TickTest(unittest.TestCase):
     def test_disallowed_subagent_name_is_ignored_and_session_still_saves(self):
         self.write(A, line("m1", 1200))
         self.write_sub(A, "agent-a b.jsonl", line("s1", 500))
+        self.write_sub(A, "agent-a..b.jsonl", line("s2", 500))
         self.herdr.panes = [claude_pane("p1", A)]
         self.svc.tick()
         self.assertEqual(self.take(), [("report", "p1", SOURCE, TOKEN, "1.2k tokens", 60000)])

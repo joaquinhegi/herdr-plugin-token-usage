@@ -3,7 +3,7 @@
 import re
 
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-SUBAGENT_NAME = re.compile(r"agent-[A-Za-z0-9_.-]+\.jsonl")  # one rule for locator and state store
+SUBAGENT_NAME = re.compile(r"agent-(?!.*\.\.)[A-Za-z0-9_.-]+\.jsonl")  # one rule for locator and state store
 
 
 def claude_session_id(pane: dict) -> str | None:

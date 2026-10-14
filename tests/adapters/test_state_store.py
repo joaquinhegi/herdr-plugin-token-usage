@@ -83,7 +83,7 @@ class StateStoreTest(unittest.TestCase):
 
     def test_file_key_allowlist(self):
         for bad in ("", ".", "..", "/abs", "~/x", "~", "other", "subagents/x.jsonl", "subagents/agent-1.json",
-                    "subagents/agent-1/x.jsonl", "main/x"):
+                    "subagents/agent-1/x.jsonl", "subagents/agent-a..b.jsonl", "main/x"):
             with self.subTest(key=bad), self.assertRaises(ValueError):
                 self.store.save_session(UUID, state(files={bad: {"offset": 0}}))
         self.assertTrue(self.store.save_session(UUID, state(files={"main": {}, "subagents/agent-a1.jsonl": {}})))

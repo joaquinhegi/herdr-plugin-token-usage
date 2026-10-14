@@ -19,7 +19,7 @@ TMP_MAX_AGE = 3600
 
 def file_key_allowed(key: str) -> bool:
     name = key[len("subagents/"):] if key.startswith("subagents/") else None
-    return key == "main" or (name is not None and SUBAGENT_NAME.fullmatch(name) is not None and ".." not in name)
+    return key == "main" or (name is not None and SUBAGENT_NAME.fullmatch(name) is not None)
 
 
 def _check_state(state: dict[str, Any]) -> None:
