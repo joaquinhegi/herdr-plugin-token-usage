@@ -13,6 +13,7 @@ from token_usage.adapters.jsonl_tail import JsonlTail  # noqa: E402
 from token_usage.adapters.state_store import StateStore  # noqa: E402
 from token_usage.app.tick import SOURCE, TOKEN, TickService  # noqa: E402
 from token_usage.ports import HerdrError  # noqa: E402
+from tests.support import unreadable_files  # noqa: E402
 
 A = "1a1a1a1a-1111-4111-8bbb-111111111111"
 B = "2b2b2b2b-2222-4222-8ccc-222222222222"
@@ -210,7 +211,7 @@ class TickTest(unittest.TestCase):
         self.assertIn(f"session_failed error=OSError session={A[:8]}", log)
         self.assertNotIn(A, log)  # only the 8-char prefix is ever logged
 
-    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    @unreadable_files
     def test_unreadable_transcript_shows_nothing_and_clears(self):
         """session-mapping: No reliable session, no figure (unreadable main or subagent)."""
         self.write(A, line("m1", 1200))
@@ -233,7 +234,7 @@ class TickTest(unittest.TestCase):
         self.assertNotIn(A, log)
         self.assertNotIn("-proj", log)
 
-    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    @unreadable_files
     def test_unreadable_transcript_logs_only_on_change(self):
         self.write(A, line("m1", 1200))
         target = self.base / "projects" / "-proj" / f"{A}.jsonl"

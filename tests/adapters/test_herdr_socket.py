@@ -9,8 +9,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from token_usage.adapters.herdr_socket import HerdrSocket  # noqa: E402
 from token_usage.ports import HerdrError  # noqa: E402
 from tests.adapters.herdr_fakes import FakeServer, fixture_panes, ok_handler  # noqa: E402
+from tests.support import posix_only  # noqa: E402
 
 
+@posix_only
 class HerdrSocketTest(unittest.TestCase):
     def serve(self, handler):
         srv = FakeServer(handler)

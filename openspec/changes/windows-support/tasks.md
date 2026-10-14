@@ -21,7 +21,7 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 | Unit | Goal | PR | Focused test | Runtime harness | Rollback |
 |------|------|----|--------------|-----------------|----------|
-| 1 | Host port, no behavior change | PR1 | `-s tests/lifecycle` | existing 200 tests green | revert PR1 |
+| 1 | Host port, no behavior change | PR1 | `-s tests/lifecycle` | existing 199 tests green | revert PR1 |
 | 2a | Windows lock/stop | PR2a | `-p "test_host_windows*"` | real child on Windows (CI) | host_windows.py, daemon stopping |
 | 2b | Terminate guard, manifest | PR2b | `-p "test_manifest*"` | manifest tomllib | manifest, herdr_cli |
 | 3 | Portable tests + CI | PR3 | full suite | Actions matrix | tests, ci.yml |
@@ -35,7 +35,7 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 - [x] 1.4 GREEN `herdr_fallback.py` catch.
 - [x] 1.5 RED `tests/adapters/test_atomic.py`: transient PermissionError retried; persistent fails after 5 tries.
 - [x] 1.6 GREEN `adapters/atomic.py`; use in `state_store.py`, `_write_pidfile`.
-- [x] 1.7 Verify: all 200 existing tests unchanged and green.
+- [x] 1.7 Verify: all 199 existing tests unchanged and green.
 
 ## Slice 2a: WindowsHost (PR2a)
 
@@ -55,8 +55,9 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 3: Portability + CI (PR3)
 
-- [ ] 3.1 Skip `FakeServer`/`/tmp`/`TestRealSpawn` off POSIX; `mkdtemp()` without `dir`; `SYSTEMROOT` in envs.
-- [ ] 3.2 `.github/workflows/ci.yml`: ubuntu/macos/windows x 3.11/3.13, SHA-pinned, `contents: read`, `persist-credentials: false`, `python -B -m unittest discover -v`.
+- [x] 3.1 Skip `FakeServer`/`/tmp`/`TestRealSpawn` off POSIX; `mkdtemp()` without `dir`; `SYSTEMROOT` in envs. Shared guards in `tests/support.py`; ~48 of 215 tests skip on Windows (per simulation); per-test SIGALRM limit in daemon tests.
+- [x] 3.1a Carry-overs from slice 1 verify: W2 (retry wiring for `StateStore._write` and `_write_pidfile`), W3 (`stop` returns `failed` on unverified holder; `record_identity` truncates, H6), S3 (baseline 199), S4 (bounded tests).
+- [x] 3.2 `.github/workflows/ci.yml`: ubuntu/macos/windows x 3.11/3.13, SHA-pinned, `contents: read`, `persist-credentials: false`, `python -B -m unittest discover -v`.
 
 ## Slice 4: Config path + docs (PR4)
 

@@ -1,4 +1,3 @@
-import fcntl
 import json
 import os
 import signal
@@ -14,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from token_usage.adapters import log as tlog  # noqa: E402
 from token_usage.adapters.state_store import StateStore  # noqa: E402
 from token_usage.lifecycle import daemon  # noqa: E402
+from tests.support import child_env, posix_only, time_limit  # noqa: E402
 
 MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
 
@@ -38,6 +38,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)  # registered first, so it runs last (LIFO)
+        time_limit(self)
         self.dir = Path(self.tmp.name)
         self.logger = tlog.make_logger(self.dir / "logs", "t_daemon_%d" % id(self))
         self.addCleanup(tlog.close_logger, self.logger)
@@ -60,6 +61,7 @@ class Base(unittest.TestCase):
 
     def hold_lock(self, pid=None):
         """Hold the lock like a probe; with pid, like a daemon that recorded itself in the lock file."""
+        import fcntl
         fd = os.open(self.dir / daemon.LOCK, os.O_CREAT | os.O_RDWR, 0o600)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if pid is not None:
@@ -78,6 +80,7 @@ class Base(unittest.TestCase):
         (self.dir / daemon.PID).write_text(json.dumps({"pid": pid, "socket_path": sock, "started_at": 1.0, "last_tick": 2.0}))
 
 
+@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestRun(Base):
     def test_second_run_exits_zero_without_ticking(self):
         self.hold_lock()
@@ -146,6 +149,7 @@ class TestRun(Base):
         self.assertEqual(len(calls), 5)
 
 
+@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestRunHardening(Base):
     def test_run_retries_lock_so_a_probe_collision_leaves_a_poller(self):
         fd = self.hold_lock()
@@ -173,6 +177,7 @@ class TestRunHardening(Base):
         self.poller(lambda: True, sleeps=3, step=2000).run()  # t=1000, 3000, 5000
         self.assertEqual(pruned, [1000.0, 5000.0])
 
+    @posix_only  # SIGHUP does not exist on Windows
     def test_signal_handlers(self):
         for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
             self.addCleanup(signal.signal, sig, signal.getsignal(sig))
@@ -205,6 +210,7 @@ class FakePopen:
         FakePopen.calls.append((a, kw))
 
 
+@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestStart(Base):
     def setUp(self):
         super().setUp()
@@ -297,6 +303,7 @@ class TestStart(Base):
         self.assertEqual(FakePopen.calls, [])
 
 
+@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestStatus(Base):
     def test_status_shows_only_pid_tick_and_count(self):
         self.hold_lock()
@@ -312,8 +319,10 @@ class TestStatus(Base):
         self.assertEqual(daemon.status(self.dir, self.store), "stopped")
 
 
+@posix_only  # real flock daemon + shebang fake bin; Windows gets its own in slice 2a/2b
 class TestRealSpawn(unittest.TestCase):
     def test_start_status_stop_and_missing_env(self):
+        time_limit(self, 60)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)  # first registered, last run: killpid below runs before it
         tmp = Path(tmp.name)
@@ -321,8 +330,8 @@ class TestRealSpawn(unittest.TestCase):
         fake.write_text("#!/bin/sh\necho '[]'\n")
         fake.chmod(0o755)
         state = tmp / "state"
-        env = {"PATH": os.environ["PATH"], "HOME": str(tmp), "HERDR_SOCKET_PATH": str(tmp / "no.sock"),
-               "HERDR_PLUGIN_STATE_DIR": str(state), "HERDR_BIN_PATH": str(fake)}
+        env = child_env(HOME=str(tmp), HERDR_SOCKET_PATH=str(tmp / "no.sock"),
+                        HERDR_PLUGIN_STATE_DIR=str(state), HERDR_BIN_PATH=str(fake))
 
         def killpid():
             try:
@@ -335,7 +344,7 @@ class TestRealSpawn(unittest.TestCase):
         def run(cmd, e=env):
             return subprocess.run([sys.executable, "-B", str(MAIN), cmd], env=e, capture_output=True, text=True, timeout=20)
 
-        bad = run("start", {"PATH": os.environ["PATH"]})
+        bad = run("start", child_env())
         self.assertNotEqual(bad.returncode, 0)
         self.assertNotIn("Traceback", bad.stderr)
         self.assertEqual(run("start").returncode, 0)

@@ -12,8 +12,10 @@ from token_usage.adapters.herdr_cli import HerdrCli  # noqa: E402
 from token_usage.adapters.herdr_fallback import FallbackHerdr  # noqa: E402
 from token_usage.adapters.herdr_socket import HerdrSocket  # noqa: E402
 from tests.adapters.herdr_fakes import FakeServer, fixture_panes, make_fake_bin, ok_handler  # noqa: E402
+from tests.support import posix_only  # noqa: E402
 
 
+@posix_only  # executes the shebang fake bin; Windows CLI gets real tests with the .exe work
 class FallbackTest(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
