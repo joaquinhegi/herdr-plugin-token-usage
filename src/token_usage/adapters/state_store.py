@@ -12,10 +12,25 @@ MAX_AGE = 30 * 86400
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
+_FILE_KEY = re.compile(r"^(main|subagents/agent-[A-Za-z0-9_.-]+\.jsonl)$")
+TMP_MAX_AGE = 3600
+
+
 def _check_state(state: dict[str, Any]) -> None:
     for key in state.get("files", {}):
-        if key.startswith("/") or ".." in Path(key).parts or "\\" in key or ":" in key:
-            raise ValueError("file keys must be relative")
+        if not _FILE_KEY.fullmatch(key) or ".." in key:
+            raise ValueError("file key not allowed")
+
+
+def _fsync_dir(directory: Path) -> None:
+    try:
+        fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:  # best effort: not every filesystem allows it
+        pass
 
 
 class StateStore:
@@ -35,6 +50,7 @@ class StateStore:
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, path)
+            _fsync_dir(path.parent)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
@@ -77,4 +93,11 @@ class StateStore:
             path.unlink(missing_ok=True)
             self._written.pop(str(path), None)
             removed += 1
+        for folder in (self.root, self.root / "sessions"):
+            for tmp in folder.glob("*.tmp"):
+                try:
+                    if now - tmp.stat().st_mtime > TMP_MAX_AGE:
+                        tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         return removed

@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -48,7 +49,7 @@ class StateStoreTest(unittest.TestCase):
         with mock.patch("os.fsync", side_effect=lambda fd: calls.append("fsync")), \
                 mock.patch("os.replace", side_effect=lambda a, b: calls.append("replace")):
             self.store.save_session(UUID, state())
-        self.assertEqual(calls, ["fsync", "replace"])
+        self.assertEqual(calls, ["fsync", "replace", "fsync"])  # file, rename, parent dir
 
     def test_no_temp_files_left_and_only_dirty_written(self):
         self.assertTrue(self.store.save_session(UUID, state()))
@@ -79,6 +80,24 @@ class StateStoreTest(unittest.TestCase):
                 self.store.save_session(UUID, state(files={bad: {"offset": 0}}))
         with self.assertRaises(ValueError):
             self.store.save_session("../evil", state())
+
+    def test_file_key_allowlist(self):
+        for bad in ("", ".", "..", "/abs", "~/x", "~", "other", "subagents/x.jsonl", "subagents/agent-1.json",
+                    "subagents/agent-1/x.jsonl", "main/x"):
+            with self.subTest(key=bad), self.assertRaises(ValueError):
+                self.store.save_session(UUID, state(files={bad: {"offset": 0}}))
+        self.assertTrue(self.store.save_session(UUID, state(files={"main": {}, "subagents/agent-a1.jsonl": {}})))
+
+    def test_prune_sweeps_only_old_orphan_tmp_files(self):
+        self.store.save_session(UUID, state(last_seen=1000))
+        old, fresh = self.root / "sessions" / "a.tmp", self.root / "sessions" / "b.tmp"
+        root_old = self.root / "c.tmp"
+        for f in (old, fresh, root_old):
+            f.write_text("x")
+        for f, age in ((old, 7200), (root_old, 7200), (fresh, 10)):
+            os.utime(f, (5000 - age, 5000 - age))
+        self.store.prune(now=5000)
+        self.assertEqual((old.exists(), root_old.exists(), fresh.exists()), (False, False, True))
 
     def test_published_roundtrip(self):
         self.store.save_published({"seq": 7, "panes": {}})

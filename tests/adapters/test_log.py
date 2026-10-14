@@ -29,6 +29,11 @@ class LogTest(unittest.TestCase):
             h.flush()
         return "".join(p.read_text() for p in (self.root / "logs").iterdir())
 
+    def test_make_logger_twice_adds_no_duplicate_handler(self):
+        again = tlog.make_logger(self.root / "logs", self.logger.name)
+        self.assertIs(again, self.logger)
+        self.assertEqual(len(self.logger.handlers), 1)
+
     def test_rotation_settings(self):
         handler = self.logger.handlers[0]
         self.assertIsInstance(handler, RotatingFileHandler)
@@ -68,7 +73,7 @@ class LogTest(unittest.TestCase):
             tlog.log_event(self.logger, "tick", lines=len(result.objects), undecodable=result.undecodable)
             sid = f"{len(name):08d}-2222-3333-4444-555555555555"
             store.save_session(sid, {"provider": "claude", "last_seen": 1, "total": ledger.total,
-                                     "files": {name: result.position},
+                                     "files": {"main": result.position},
                                      "ledger": ledger.entries, "aliases": ledger.aliases})
         scanned = [p for d in (self.root / "state", self.root / "logs") for p in d.rglob("*") if p.is_file()]
         self.assertTrue(scanned)

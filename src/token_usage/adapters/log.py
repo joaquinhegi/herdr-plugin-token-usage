@@ -14,6 +14,8 @@ def make_logger(directory: Path, name: str = "token_usage") -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    if logger.handlers:  # already set up: no duplicate lines
+        return logger
     handler = RotatingFileHandler(directory / "token-usage.log", maxBytes=256 * 1024, backupCount=1)
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.addHandler(handler)
