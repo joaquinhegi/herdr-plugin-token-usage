@@ -1281,3 +1281,143 @@ The new non-critical observations are S-R1 to S-R5 above, carried over.
 PASS WITH WARNINGS
 
 164/164 tests pass and the build is clean. W1, W3, W4, W5, W6, W8 and S1 are resolved, with runtime, stress and mutation evidence: 16 of 21 mutants were killed, including every in-scope mutant except M17 and M20 (see S-R3). E1 and E2 no longer reproduce. Two narrow residuals remain and are carried over: an in-flight tick can still exceed the handoff wait (W-R1), and a microsecond pid-reuse window remains (S-R1). W2 and W9 wait on the user's live link/enable step, and W7 is still open.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:e95838ca051232b314d4f2100f2a90b25ab67363263f41d53e872ff8a8d7e16c
+verdict: fail
+blockers: 1
+critical_findings: 1
+requirements: 1/2
+scenarios: 1/2
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:bf510386786bc9d7435868537b0da32fc165463fd00163671b213143561c3c1f
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Verification Report: Slice 6a (sidebar patch, README, SECURITY, design sync)
+
+**Change**: agent-token-usage-mvp
+**Candidate**: `git diff slice-5-lifecycle slice-6-docs` (HEAD 1da71b4, tree f87abf3). Commits 5fc066c, 8671e9d, 4c20056, 1da71b4. 7 files, +421/-15 (overage accepted by the user).
+**Mode**: Strict TDD (`openspec/config.yaml:9`).
+**Scope**: sidebar-metadata "Approval-gated config patch" (1 scenario: Custom sidebar) and plugin-lifecycle "Uninstall and documentation" (1 scenario: Uninstall). 2 requirements, 2 scenarios. Full change: 17 requirements, 26 scenarios.
+**Evidence revision**: sha256 over `tree:<tree>\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`.
+**Method**: All execution in a git-archive copy under the scratchpad with `python3 -B`. Repo untouched (`git status` clean). No `~/.config/herdr` read or written; every `--apply` used temp dirs, and CLI runs used a temp HOME. Herdr was used only for read-only `--help` (plus reading the Homebrew-installed README/CHANGELOG files). `herdr --default-config` was NOT run (outside the allowed `--help` boundary).
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Slice 6a tasks | 3 (6.1, 6.2, 6.3) |
+| Complete | 3 |
+| Incomplete in 6a scope | 0 (6.4 [APPROVAL] manual validation and 5.3a link/enable remain user-owned and unchecked) |
+
+### Build & Tests Execution
+**Build**: Passed. `python3 -B -m compileall -q src tests`, exit 0, empty output.
+**Tests**: 177 passed, 0 failed, 0 skipped (`Ran 177 tests`, OK) on Python 3.14.8. Stdout noise from `apply()` prints ("created", "patched ...") is harmless.
+**Coverage**: Not available.
+
+### Spec Compliance Matrix (slice 6a scope)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Approval-gated config patch | Custom sidebar | `test_sidebar_patch.py > TestPlan.test_custom_claude_row_only_adds_tokens`, `test_plan_writes_nothing`, `TestCli.test_print_and_apply_via_main`, `TestApply.test_backup_then_atomic_replace` | COMPLIANT (scenario as written). Requirement still fails, see C1 and W1. |
+| Uninstall and documentation | Uninstall | `TestApply.test_backup_then_atomic_replace` (backup bytes == original) only | PARTIAL: the rollback is documented but not exercised; it does not cover the no-backup "created" path, and Herdr unlink/uninstall behavior is not verified (W3). |
+
+**Compliance summary**: 1/2 scenarios compliant, 1 partial.
+
+### Sidebar patch safety analysis (runtime experiments in temp dirs)
+| Check | Result | Evidence |
+|---|---|---|
+| Text-minimal edit, comment preserved | OK (LF files) | CUSTOM fixture keeps `# keep me`. E5 commented trailing row, E6 `]`/escaped quotes inside strings, E9 array-of-tables after the section: all patched correctly. |
+| tomllib re-parse equality | OK, load-bearing, untested | E4: a fake `[ui.sidebar.agents]` header inside a multiline string is misattributed by the line scanner and caught only by `parsed != expect` (`sidebar_patch.py:126`) -> refuse. Mutation M1 (remove the comparison) SURVIVES. |
+| Refusal paths | OK | No rows, inline table, invalid TOML, empty rows, multiline strings, quoted header (E7), dotted keys (E11), codex-only override (E14): all refuse, exit 1, stderr. |
+| `--print` writes nothing | OK | `test_plan_writes_nothing`, CLI test; M5 KILLED. |
+| `--apply` backup before atomic replace, mode kept | OK for regular files | `sidebar_patch.py:146-158`; M3, M4, M17 KILLED. Backup is created with the default umask (E1: config 0600 -> backup 0644). |
+| Symlinked config | DEFECT (W2) | E1: `config.toml` symlinked to a dotfiles target. After `--apply`: `still_symlink=False`, `target_patched=False`. `os.replace` (`:158`) converts the symlink into a regular file; the dotfiles source is silently left behind. |
+| CRLF config | Not text-minimal (S3) | E12: `read_text` (`:92`) normalizes `\r\n`, so every line is rewritten with LF; the `--print` diff does not show it. |
+| Non-UTF-8 file / directory path | Traceback (S2) | E2 `UnicodeDecodeError`, E3 `IsADirectoryError`: `read_text` at `:92` is outside the `try`, so the `UnicodeDecodeError` catch at `:95` is dead code. |
+| Concurrent edit | Lost update, recoverable (S4) | race.py: an edit that lands between `plan()` and `os.replace` is overwritten; the backup holds the edited bytes, so it is recoverable. |
+| Never invoked by startup | OK | Manifest and daemon/tick contain no `sidebar_patch`; lazy import only in `main.py:47-49`; M21 KILLED. |
+| Python 3.9 | OK | `/usr/bin/python3` (3.9.6) `sidebar-patch --print` -> "Python 3.10 or newer is required", rc 2. |
+| Python 3.10 | DEFECT (W4) | `tomllib` exists only in 3.11+ (PEP 680); `sidebar_patch.py:15` and the test module import it unguarded. 3.10 was not available locally, so this is static evidence only. |
+
+### Product risk: missing `[ui.sidebar.agents]` (C1)
+- `sidebar_patch.py:20,101-103`: with no `[ui.sidebar.agents]` (or no file), the patch appends `rows = [["agent", "$tokens"]]`.
+- explore.md:25-26 says that `rows` (and `rows_by_agent`) replace the layout entirely, and that `~/.config/herdr/config.toml` does not exist on the user's machine today. So the default path IS the user's path.
+- The source spec `HERDR_PLUGIN_TOKEN_USAGE_SPEC.md:77-89` shows an initial layout of `[["state_icon","workspace","tab"],["agent","$tokens"]]` and says to adapt to the existing config "without destroying it". The minimal section drops the state icon/workspace/tab row and replaces Herdr's built-in default layout with a guessed single row.
+- The `--print` diff shows only `+` lines, so a reviewer cannot see that the defaults are dropped. README.md:31 presents this as a safe "minimal section".
+- This breaks the requirement's intent ("adding `$tokens` to `rows` ... without ... dropping custom rows", sidebar-metadata spec) and the user's stated goal of adding `$tokens` without breaking the sidebar.
+- Recommended safe behavior: when no `[ui.sidebar.agents]` exists, REFUSE (exit 1) and print manual instructions. Tell the user to copy Herdr's default `rows` from `herdr --default-config` into `config.toml` and append `"$tokens"` to the agent row, then re-run `--print` (which will then take the safe "extend last row" path). Alternative (heavier): read the defaults from `herdr --default-config` via `HERDR_BIN_PATH` and seed the section with them plus `$tokens`; that needs the user to approve running Herdr and adds a subprocess. Update README.md:31, design.md:82, tasks 6.2, and the tests (`test_missing_file_and_missing_section_add_minimal_section`, `test_apply_noop_and_missing_file`, `test_default_config_is_under_home...`) accordingly.
+
+### Mutation Summary (archive copies, full suite)
+- Killed (11): M2 (no triple-quote refusal), M3 (no backup), M4 (no chmod), M5 (`--print` applies), M6 (glue always comma), M7 (no noop), M17 (fixed mode), M19 (refuse exit 0), M20 (refuse to stdout), M21 (eager import in main), M23 (refuse when file is missing).
+- Survived (7):
+  - M1: the `parsed != expect` safety net is removed (the key safety check).
+  - M8: comment skipping is removed (no comment containing brackets or quotes in the fixtures).
+  - M12: backup opened `wb` instead of `xb`.
+  - M13: `os.replace` replaced by an in-place write (atomicity untested).
+  - M14: default config path changed to `/nonexistent_dir_x/...` (`test_default_config_is_under_home...` cannot tell; it only sees `/dev/null`).
+  - M18: escape skipping is removed.
+  - M22: separator newline before the appended section is removed.
+
+### Docs accuracy
+| Claim | Status | Evidence |
+|---|---|---|
+| `herdr plugin link/enable/disable/unlink/uninstall`, `log list` names and arity | OK | `herdr plugin <cmd> --help`; id `local.token-usage` matches `herdr-plugin.toml:4`. |
+| Total definition, Claude-only, never `0` | OK | Consistent with design and earlier verified slices. |
+| Inspected dirs (`~/.claude/projects`, subagents) | OK | `main.py:39`, `claude_locator.py:56-60`. |
+| Log location `<state dir>/token-usage.log` | OK | `adapters/log.py:17`. |
+| Python >= 3.10 | Partly wrong | The poller needs 3.10; `sidebar-patch` and the tests need 3.11 (W4). |
+| "Disable: ... (the poller clears its tokens on stop)" | Overclaim | README.md:36. The poller is self-detached (`start_new_session=True`, `daemon.py:202`). Nothing shows that `herdr plugin disable` runs the `stop` action, and the orphan guard fires only when Herdr is unreachable. The rollback in proposal.md:70 says "Run the stop action, then disable/uninstall" (W3). |
+| "unlink ... or uninstall removes only plugin files and state" | Unverified | README.md:37. It is not shown that Herdr deletes `HERDR_PLUGIN_STATE_DIR` on unlink. A running poller keeps publishing after unlink or uninstall unless it is stopped first (W3). |
+| "Revert the sidebar patch by restoring its `.bak-*`" | Incomplete | No backup exists on the created-file path (`sidebar_patch.py:150`), which is the user's case. Restoring an old backup also drops later user edits (W3). |
+| SECURITY.md:21 "handoff may wait up to WAIT_S (8 s) ... before respawning" | Understated | The prior verify (W-R1, E2-grow) showed that a slow in-flight tick makes the handoff return `failed` (rc 1), and then no poller runs. The doc implies it always respawns (W5). |
+| SECURITY.md:20 pid-reuse microsecond window; :19 symlink/hardlink same-user residual | OK | Matches S-R1. It omits the sidebar-patch symlink clobber (W2). |
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|---|---|---|
+| sidebar_patch bullet (design.md:82) | Code matches | The design itself encodes C1 and diverges from the spec text "add `$tokens` to `rows` and any `rows_by_agent` overrides" (E8: with a claude override present, `rows` is not patched) (W1). |
+| Python >= 3.10 (design.md:5) | Partial | tomllib needs 3.11 (W4). |
+| State schema (design.md:62-64) | Mostly | `skip` is stored as `1` or absent (`jsonl_tail.py:68,78`), not `false` (S5). |
+| Duplicate guard rationale (design.md:30) "immune to ... PID reuse" | Overclaim | It contradicts the S-R1 residual that SECURITY.md:20 admits (S5). |
+| Handoff `WAIT_S` 8 s, `CLEANUP_S` 3 s, `tick() -> bool`, `-B` spawn | Yes | `daemon.py:33,35,202`, `tick.py:22`. |
+
+### TDD Compliance
+| Check | Result |
+|---|---|
+| TDD evidence reported | Yes (apply-progress #159: RED = ImportError before src, GREEN 177) |
+| All tasks have tests | Yes for 6.1/6.2 (13 new tests); 6.3 is docs |
+| Triangulation | Adequate for refusal shapes (5 subtests) and glue variants; weak for the scanner (M8, M18) and the safety net (M1) |
+| Safety net / triangulate columns | Not reported (W7 carried) |
+
+**Assertion quality**: no tautologies. `test_default_config_is_under_home_and_never_used_by_startup` does not assert the default path (M14 survives), so its name overclaims (S1).
+
+### Issues Found
+**CRITICAL**:
+- C1: `sidebar_patch.py:20,101-103` (with README.md:31, design.md:82, tasks 6.2). When `[ui.sidebar.agents]` is missing, which is the user's actual state (explore.md:26), `--apply` writes `rows = [["agent", "$tokens"]]`. That replaces Herdr's default sidebar layout and drops the state_icon/workspace/tab row the source spec shows (`HERDR_PLUGIN_TOKEN_USAGE_SPEC.md:81-84`). The `--print` diff hides this. Fix: refuse and print manual instructions (copy the defaults from `herdr --default-config`, then append `"$tokens"`), and update the docs and tests.
+
+**WARNING**:
+- W1: The spec/design contract drifted during apply. The sidebar-metadata spec says "adding `$tokens` to `rows` and any `rows_by_agent` overrides". The code (and the rewritten design.md:82 and tasks 6.1/6.2) patches only the effective Claude row; E8 shows `rows` left untouched when a claude override exists. Patching only the Claude row is defensible because Codex shows nothing, but the spec needs a matching delta, or the code must follow the spec.
+- W2: A symlinked config is clobbered (`sidebar_patch.py:158`). E1: the symlink becomes a regular file and the dotfiles target is not patched. The backup is also created with umask mode (0644 for a 0600 config, `:146`). Fix: resolve with `os.path.realpath` and write next to the target, or refuse on symlinks; copy the mode to the backup.
+- W3: Uninstall and disable docs (README.md:36-37) overclaim and are incomplete. They do not say to run `stop` before disable, unlink or uninstall (the detached poller keeps publishing). They do not show that state is removed on unlink. They give no rollback for the created-file path (no `.bak-*` exists there). This leaves the Uninstall scenario PARTIAL.
+- W4: The Python version claim is wrong for `sidebar-patch` and the tests. `tomllib` needs 3.11 (`sidebar_patch.py:15`). On 3.10 the main.py guard passes and an ImportError traceback follows. Either say ">= 3.11 for sidebar-patch" or guard the import with a clean message.
+- W5: SECURITY.md:21 understates the handoff residual. Per W-R1, the handoff can fail and leave no poller running; it does not just wait and then respawn.
+- W6: The tomllib equality safety net is untested (M1 survives) even though E4 proves it is load-bearing. Add the E4 fixture (a fake header inside a multiline string) as a refusal test.
+- W7 (carried): the Strict TDD table has no TRIANGULATE or SAFETY NET columns.
+- W9/W2-old (carried): 5.3a and 6.4 [APPROVAL] are unchecked and user-owned; W-R1 is still open.
+
+**SUGGESTION**:
+- S1: M8, M12, M13, M14, M18 and M22 survive. Add fixtures for a comment containing `]`/`"` and for an escaped quote; assert the default path (for example, the CLI `--print` diff names `config.toml` under the temp HOME); assert the backup is never overwritten.
+- S2: Move `read_text` into the `try` (`:92`) and catch `OSError` and `UnicodeDecodeError`, so you refuse cleanly instead of printing a traceback that contains an absolute path (E2, E3).
+- S3: Preserve line endings. Read and write with `newline=""` so CRLF files stay text-minimal (E12).
+- S4: Narrow the TOCTOU window. Re-read the file in `apply()` and abort if it differs from the planned text (race.py shows a lost update, recoverable from the backup).
+- S5: design.md:30 "immune to ... PID reuse" and design.md:64 `"skip":false` are slightly inaccurate. `MANUAL` (`sidebar_patch.py:22`) hardcodes `~/.config/herdr/config.toml` even when `--config` is given.
+- S6: Tests print to stdout during the run. Capture with `contextlib.redirect_stdout`.
+
+### Verdict
+FAIL
+
+The suite passes (177/177) and the build is clean, and the patch is careful on files that already have a sidebar layout: it makes minimal edits, preserves comments, verifies with tomllib, refuses unsafe shapes, writes nothing on `--print`, and backs up before an atomic replace. It still fails on C1. On the user's real starting state (no `[ui.sidebar.agents]`), `--apply` silently replaces Herdr's default sidebar with a single guessed row, which defeats the purpose of the patch. Fix C1 (refuse with manual instructions) and W2/W3/W4 before archive.
