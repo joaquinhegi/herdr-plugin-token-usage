@@ -1,6 +1,7 @@
 """Rotating file log that can only carry event names, ints and safe tokens."""
 
 import logging
+import os
 import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -14,9 +15,13 @@ def make_logger(directory: Path, name: str = "token_usage") -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    if logger.handlers:  # already set up: no duplicate lines
-        return logger
-    handler = RotatingFileHandler(directory / "token-usage.log", maxBytes=256 * 1024, backupCount=1)
+    target = str(directory / "token-usage.log")
+    for old in list(logger.handlers):
+        if isinstance(old, RotatingFileHandler) and old.baseFilename == os.path.abspath(target):
+            return logger  # already set up: no duplicate lines
+        old.close()  # points elsewhere: replace it
+        logger.removeHandler(old)
+    handler = RotatingFileHandler(target, maxBytes=256 * 1024, backupCount=1)
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     logger.addHandler(handler)
     return logger

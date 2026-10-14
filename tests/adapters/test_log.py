@@ -34,6 +34,14 @@ class LogTest(unittest.TestCase):
         self.assertIs(again, self.logger)
         self.assertEqual(len(self.logger.handlers), 1)
 
+    def test_make_logger_with_different_directory_replaces_handler(self):
+        other = self.root / "other"
+        again = tlog.make_logger(other, self.logger.name)
+        self.assertEqual(len(again.handlers), 1)
+        tlog.log_event(again, "moved")
+        again.handlers[0].flush()
+        self.assertIn("moved", (other / "token-usage.log").read_text())
+
     def test_rotation_settings(self):
         handler = self.logger.handlers[0]
         self.assertIsInstance(handler, RotatingFileHandler)

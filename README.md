@@ -34,5 +34,5 @@ Default config: `~/.config/herdr/config.toml` (or `$HERDR_CONFIG_PATH` when set,
 
 - Logs: `herdr plugin log list`, plus `<state dir>/token-usage.log` (events and counts only, never content or paths).
 - Disable: first run the plugin's `stop` action so the poller clears its tokens and exits, then `herdr plugin disable local.token-usage`. Shell fallback: `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop` (the variable must point at the plugin's state directory).
-- Uninstall: first run the plugin's `stop` action (or `python3 -B src/main.py stop`) so no poller is left running, then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Check whether `$HERDR_PLUGIN_STATE_DIR` is left behind and remove it manually if so.
+- Uninstall: first run the plugin's `stop` action (or the shell fallback `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop`) so no poller is left running, then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Check whether `$HERDR_PLUGIN_STATE_DIR` is left behind and remove it manually if so.
 - Revert the sidebar patch by removing the `"$tokens"` entries or restoring the `.bak-*` backup next to the config. The patch only edits an existing config, so if no backup exists it never changed your file; nothing else is touched.
