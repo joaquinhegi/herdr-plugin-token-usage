@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from token_usage.adapters.atomic import replace_with_retry
 from token_usage.adapters.log import log_event, log_exception
 from token_usage.app.tick import SOURCE, TOKEN
 from token_usage.domain.reconcile import Clear, reconcile
@@ -50,7 +51,7 @@ def _write_pidfile(state_dir: Path, info: dict) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(info, fh)
-        os.replace(tmp, state_dir / PID)
+        replace_with_retry(tmp, state_dir / PID)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from token_usage.adapters.atomic import replace_with_retry
 from token_usage.domain.mapping import SUBAGENT_NAME
 
 VERSION = 1
@@ -55,7 +56,7 @@ class StateStore:
                 fh.write(payload)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(tmp, path)
+            replace_with_retry(tmp, path)
             _fsync_dir(path.parent)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
