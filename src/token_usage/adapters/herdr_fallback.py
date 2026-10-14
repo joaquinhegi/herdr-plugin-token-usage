@@ -17,7 +17,7 @@ class FallbackHerdr:
         if self._socket is not None:
             try:
                 return self._socket.list_panes()
-            except (HerdrError, OSError) as exc:
+            except (HerdrError, OSError, AttributeError) as exc:  # AttributeError: no AF_UNIX transport
                 log_event(self._logger, "herdr_fallback", error=type(exc).__name__)
         return self._cli.list_panes()
 
