@@ -72,6 +72,16 @@ class LocatorTest(unittest.TestCase):
         self.assertNotIn(A, lines[0])
         self.assertNotIn(str(self.root), lines[0])
 
+    def test_locate_failed_logs_only_when_outcome_changes(self):
+        for _ in range(3):
+            self.assertIsNone(self.locator.locate(A))
+        self.assertEqual(len(self.log_lines()), 1)
+        path = self.touch("-proj", f"{A}.jsonl")
+        self.assertIsNotNone(self.locator.locate(A))
+        path.unlink()
+        self.assertIsNone(self.locator.locate(A))
+        self.assertEqual(len(self.log_lines()), 2)
+
     def test_ambiguous_across_projects_is_none_with_one_line(self):
         self.touch("-p1", f"{A}.jsonl")
         self.touch("-p2", f"{A}.jsonl")

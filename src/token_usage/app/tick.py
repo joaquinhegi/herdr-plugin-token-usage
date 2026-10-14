@@ -47,7 +47,10 @@ class TickService:
                     state["panes"][action.pane_id] = old[action.pane_id]
                 else:
                     state["panes"].pop(action.pane_id, None)
-        self.store.save_published({"seq": state["seq"], "panes": state["panes"]})
+        try:
+            self.store.save_published({"seq": state["seq"], "panes": state["panes"]})
+        except Exception as exc:  # next tick recomputes from the stored state
+            log_exception(self.logger, "save_published_failed", exc)
         log_event(self.logger, "tick", panes=len(pane_session), actions=len(actions))
 
     def _session_total(self, sid: str, now: float) -> int | None:
@@ -72,6 +75,9 @@ class TickService:
         dirty = False
         for key, path in paths.items():
             result = self.tailer.read(path, files.get(key))
+            if result.failed:  # main or subagent alike: a partial total would be an undercount shown as truth
+                log_event(self.logger, "transcript_unreadable", session=sid[:8])
+                return None
             for obj in result.objects:
                 parsed = claude.parse_line(obj)
                 if parsed:
@@ -79,8 +85,11 @@ class TickService:
             dirty |= files.get(key) != result.position
             files[key] = dict(result.position)
         if dirty:
-            self.store.save_session(sid, {
-                "provider": "claude", "last_seen": now, "total": ledger.total, "files": files,
-                "ledger": {k: list(v) for k, v in ledger.entries.items()}, "aliases": ledger.aliases,
-            })
+            try:
+                self.store.save_session(sid, {
+                    "provider": "claude", "last_seen": now, "total": ledger.total, "files": files,
+                    "ledger": {k: list(v) for k, v in ledger.entries.items()}, "aliases": ledger.aliases,
+                })
+            except Exception as exc:  # the total is still right; offsets are re-read idempotently
+                log_exception(self.logger, "save_session_failed", exc)
         return ledger.total

@@ -19,6 +19,7 @@ class ClaudeLocator:
     def __init__(self, projects_root: Path, logger: logging.Logger):
         self.root = Path(projects_root)
         self.logger = logger
+        self._last_failure: dict[str, str] = {}  # session id -> last logged reason
 
     def _resolve(self, path: Path, root_real: Path) -> Path | None:
         real = Path(os.path.realpath(path))
@@ -38,8 +39,12 @@ class ClaudeLocator:
             if main and main.name == f"{session_id}.jsonl":
                 mains.setdefault(main, project)
         if len(mains) != 1:
-            log_event(self.logger, "locate_failed", reason="ambiguous" if mains else "missing", matches=len(mains))
+            reason = "ambiguous" if mains else "missing"
+            if self._last_failure.get(session_id) != reason:  # log outcome changes only, not every tick
+                self._last_failure[session_id] = reason
+                log_event(self.logger, "locate_failed", reason=reason, matches=len(mains))
             return None
+        self._last_failure.pop(session_id, None)
         main = next(iter(mains))
         project = main.parent
         subs: list[Path] = []

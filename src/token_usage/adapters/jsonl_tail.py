@@ -15,6 +15,7 @@ class TailResult:
     objects: list[Any] = field(default_factory=list)
     undecodable: int = 0
     position: dict[str, int] = field(default_factory=dict)
+    failed: bool = False  # the file could not be stat'ed/opened; position is unchanged
 
 
 class JsonlTail:
@@ -27,7 +28,7 @@ class JsonlTail:
             st = os.stat(path)
             fh = open(path, "rb")
         except OSError:
-            return TailResult(position=dict(position or {}))
+            return TailResult(position=dict(position or {}), failed=True)
         with fh:
             offset = 0
             if position and position.get("inode") == st.st_ino and position.get("dev") == st.st_dev \

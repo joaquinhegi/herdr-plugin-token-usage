@@ -20,6 +20,7 @@ class TailResult(Protocol):
     objects: list[Any]
     undecodable: int
     position: dict[str, int]
+    failed: bool
 
 
 class Tailer(Protocol):

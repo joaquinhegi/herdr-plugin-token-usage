@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -67,6 +68,33 @@ class RaisingTail(JsonlTail):
         return super().read(path, position)
 
 
+class CountingTail(JsonlTail):
+    def __init__(self):
+        super().__init__()
+        self.reads = []  # (file name, stored position passed in, objects returned)
+
+    def read(self, path, position):
+        result = super().read(path, position)
+        self.reads.append((path.name, position, len(result.objects)))
+        return result
+
+
+class SaveFails(StateStore):
+    def __init__(self, root, which):
+        super().__init__(root)
+        self.which = which
+
+    def save_published(self, state):
+        if self.which == "published":
+            raise OSError("disk full")
+        return super().save_published(state)
+
+    def save_session(self, sid, state):
+        if self.which == "session":
+            raise OSError("disk full")
+        return super().save_session(sid, state)
+
+
 class TickTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -85,6 +113,16 @@ class TickTest(unittest.TestCase):
     def write(self, sid, *lines, mode="a"):
         with open(self.base / "projects" / "-proj" / f"{sid}.jsonl", mode) as fh:
             fh.write("".join(lines))
+
+    def write_sub(self, sid, name, *lines):
+        d = self.base / "projects" / "-proj" / sid / "subagents"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text("".join(lines))
+
+    def log_text(self):
+        for h in self.logger.handlers:
+            h.flush()
+        return (self.base / "logs" / "token-usage.log").read_text()
 
     def published(self):
         return (StateStore(self.base / "state").load_published() or {}).get("panes", {})
@@ -144,6 +182,68 @@ class TickTest(unittest.TestCase):
         self.service(RaisingTail(A)).tick()
         self.assertEqual([c[1] for c in self.take()], ["p2"])
         self.assertEqual(list(self.published()), ["p2"])
+        log = self.log_text()
+        self.assertIn(f"session_failed error=OSError session={A[:8]}", log)
+        self.assertNotIn(A, log)  # only the 8-char prefix is ever logged
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores file permissions")
+    def test_unreadable_transcript_shows_nothing_and_clears(self):
+        """session-mapping: No reliable session, no figure (unreadable main or subagent)."""
+        self.write(A, line("m1", 1200))
+        self.write_sub(A, "agent-1.jsonl", line("m2", 300))
+        self.herdr.panes = [claude_pane("p1", A)]
+        self.svc.tick()
+        self.assertEqual(self.published()["p1"]["value"], "1.5k tokens")
+        root = self.base / "projects" / "-proj"
+        for target in (root / f"{A}.jsonl", root / A / "subagents" / "agent-1.jsonl"):
+            self.take()
+            target.chmod(0)
+            self.addCleanup(target.chmod, 0o600)
+            self.svc.tick()  # whole session unavailable: never a partial undercount
+            self.assertEqual(([c[:2] for c in self.take()], self.published()), ([("clear", "p1")], {}))
+            target.chmod(0o600)
+            self.svc.tick()
+            self.assertEqual([c[4] for c in self.take()], ["1.5k tokens"])
+        log = self.log_text()
+        self.assertEqual(log.count("transcript_unreadable"), 2)
+        self.assertNotIn(A, log)
+        self.assertNotIn("-proj", log)
+
+    def test_save_failures_do_not_escape_tick(self):
+        """plugin-lifecycle: store failures are contained."""
+        self.write(A, line("m1", 1200))
+        self.herdr.panes = [claude_pane("p1", A)]
+        for which in ("session", "published"):
+            self.svc.store = SaveFails(self.base / which, which)
+            self.svc.tick()
+            self.assertNotEqual(self.take(), [])
+            self.assertIn(f"save_{which}_failed error=OSError", self.log_text())
+
+    def test_session_state_wiring_survives_restart(self):
+        """usage-accounting: persisted offsets, aliases, subagents, last_seen and seq are really used."""
+        self.write(A, line("m1", 1200).replace('"message"', '"requestId": "r1", "message"'))
+        self.write_sub(A, "agent-1.jsonl", line("m2", 300))
+        self.herdr.panes = [claude_pane("p1", A)]
+        tail = CountingTail()
+        self.svc = self.service(tail)
+        self.svc.tick()
+        store = StateStore(self.base / "state")
+        saved, root = store.load_session(A), self.base / "projects" / "-proj"
+        sizes = {"main": (root / f"{A}.jsonl").stat().st_size, "subagents/agent-1.jsonl": (root / A / "subagents" / "agent-1.jsonl").stat().st_size}
+        self.assertEqual({k: v["offset"] for k, v in saved["files"].items()}, sizes)
+        self.assertEqual((saved["aliases"], saved["last_seen"], sorted(saved["ledger"])), ({"r1": "m1"}, 1000.0, ["m1", "m2"]))
+        seq1 = store.load_published()["seq"]
+        self.take()
+        tail, self.clock.t = CountingTail(), self.clock.t + 20  # restart, refresh due
+        self.svc = self.service(tail)
+        self.write(A, json.dumps({"type": "assistant", "requestId": "r1", "message": {"model": "m", "usage": {"input_tokens": 1, "output_tokens": 1199}}}) + "\n")
+        self.svc.tick()
+        # only the appended line is read; the requestId-only line maps to m1 via the persisted alias
+        self.assertEqual(sorted((n, p is not None, c) for n, p, c in tail.reads), [(f"{A}.jsonl", True, 1), ("agent-1.jsonl", True, 0)])
+        self.assertEqual([c[4] for c in self.take()], ["1.5k tokens"])
+        tail, self.clock.t = CountingTail(), 500.0  # restart with the clock moved back
+        self.service(tail).tick()
+        self.assertGreater(StateStore(self.base / "state").load_published()["seq"], seq1)
 
     def test_herdr_unreachable_changes_nothing(self):
         """sidebar-metadata: Herdr unreachable."""
