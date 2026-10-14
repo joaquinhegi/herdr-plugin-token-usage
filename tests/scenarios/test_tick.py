@@ -140,6 +140,30 @@ class TickTest(unittest.TestCase):
         self.assertEqual(self.take(), [("report", "p1", SOURCE, TOKEN, "1.2k tokens", 60000),
                                        ("report", "p2", SOURCE, TOKEN, "950 tokens", 60000)])
 
+    def test_stop_during_sessions_aborts_tick_without_publishing(self):
+        self.write(A, line("m1", 1200))
+        self.write(B, line("m1", 950))
+        self.herdr.panes = [claude_pane("p1", A), claude_pane("p2", B)]
+        self.svc.should_stop = lambda: True
+        self.svc.tick()
+        self.assertEqual(self.take(), [])
+        self.assertEqual(self.published(), {})
+
+    def test_stop_between_publish_actions_keeps_unapplied_for_retry(self):
+        self.write(A, line("m1", 1200))
+        self.write(B, line("m1", 950))
+        self.herdr.panes = [claude_pane("p1", A), claude_pane("p2", B)]
+        stop = []
+        orig = self.herdr.report
+        self.herdr.report = lambda *a: (orig(*a), stop.append(1))[0]
+        self.svc.should_stop = lambda: bool(stop)
+        self.svc.tick()
+        self.assertEqual(len(self.take()), 1)
+        self.assertEqual(list(self.published()), ["p1"])  # p2 unapplied: retried next tick
+        self.svc.should_stop = lambda: False
+        self.svc.tick()
+        self.assertEqual([c[1] for c in self.take()], ["p2"])
+
     def test_total_grows_after_new_lines(self):
         """usage-accounting: Growing file."""
         self.write(A, line("m1", 1200))

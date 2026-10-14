@@ -101,6 +101,29 @@ class TestRun(Base):
         self.poller(tick, sleeps=3).run()
         self.assertEqual(len(calls), 3)
 
+    def test_stop_request_during_slow_tick_ends_run_within_bound(self):
+        import threading
+        from token_usage.adapters.claude_locator import ClaudeLocator
+        from token_usage.adapters.jsonl_tail import JsonlTail
+        from token_usage.app.tick import TickService
+        from tests.scenarios.test_tick import A, FakeHerdr as TickHerdr, claude_pane, line
+
+        projects = self.dir / "projects" / "-p"
+        projects.mkdir(parents=True)
+        (projects / f"{A}.jsonl").write_text(line("m1", 100))
+        herdr = TickHerdr()
+        herdr.panes = [claude_pane(f"p{i}", A) for i in range(20)]
+        orig = herdr.report
+        herdr.report = lambda *a: (time.sleep(0.2), orig(*a))[1]  # 20 panes x 0.2 s = 4 s tick
+        svc = TickService(herdr, ClaudeLocator(self.dir / "projects", self.logger), JsonlTail(), self.store,
+                          self.clock, self.logger)
+        p = daemon.Poller(self.dir, "/sock/a", svc.tick, herdr, self.store, self.clock, self.logger)
+        svc.should_stop = p.is_stopping
+        threading.Timer(0.5, p.request_stop).start()
+        began = time.monotonic()
+        self.assertEqual(p.run(), 0)
+        self.assertLess(time.monotonic() - began, 2.0)
+
     def test_stop_clears_published_persists_and_removes_pidfile(self):
         self.store.save_published({"seq": 5, "panes": {"p1": {"session": "s", "value": "1k", "at": 1.0}}})
         self.poller(lambda: True).run()

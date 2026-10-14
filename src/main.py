@@ -39,8 +39,10 @@ def _build_poller(state_dir: Path, bin_path: str, socket_path: str | None):
     herdr = FallbackHerdr(HerdrSocket(socket_path) if socket_path else None, HerdrCli(bin_path), logger)
     store, clock = StateStore(state_dir), Clock()
     locator = ClaudeLocator(Path.home() / ".claude" / "projects", logger)
-    tick = TickService(herdr, locator, JsonlTail(), store, clock, logger).tick
-    return daemon.Poller(state_dir, socket_path or "", tick, herdr, store, clock, logger)
+    svc = TickService(herdr, locator, JsonlTail(), store, clock, logger)
+    poller = daemon.Poller(state_dir, socket_path or "", svc.tick, herdr, store, clock, logger)
+    svc.should_stop = poller.is_stopping
+    return poller
 
 
 def main(argv: list[str]) -> int:

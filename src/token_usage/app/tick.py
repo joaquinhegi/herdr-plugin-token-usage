@@ -14,9 +14,11 @@ TOKEN = "tokens"
 
 
 class TickService:
-    def __init__(self, herdr: HerdrPort, locator, tailer: Tailer, store: StateStore, clock, logger: logging.Logger):
+    def __init__(self, herdr: HerdrPort, locator, tailer: Tailer, store: StateStore, clock, logger: logging.Logger,
+                 should_stop=None):
         self.herdr, self.locator, self.tailer = herdr, locator, tailer
         self.store, self.clock, self.logger = store, clock, logger
+        self.should_stop = should_stop or (lambda: False)  # checked between units of work
         self._unreadable: set[str] = set()  # sessions already logged as unreadable
 
     def tick(self) -> bool:
@@ -30,7 +32,11 @@ class TickService:
         pane_session = {
             p["pane_id"]: claude_session_id(p) for p in panes if isinstance(p, dict) and isinstance(p.get("pane_id"), str)
         }
-        totals = {sid: self._session_total(sid, now) for sid in sorted({s for s in pane_session.values() if s})}
+        totals = {}
+        for sid in sorted({s for s in pane_session.values() if s}):
+            if self.should_stop():  # shutting down: publish nothing from a partial view
+                return True
+            totals[sid] = self._session_total(sid, now)
         desired = {
             pane: (sid, totals[sid]) if sid and totals[sid] is not None else None for pane, sid in pane_session.items()
         }
@@ -39,12 +45,15 @@ class TickService:
         old = previous.get("panes", {})
         for action in actions:
             try:
+                if self.should_stop():
+                    raise InterruptedError("stop requested")  # left unapplied, retried by the next run
                 if isinstance(action, Clear):
                     self.herdr.clear(action.pane_id, SOURCE, TOKEN, action.seq)
                 else:
                     self.herdr.report(action.pane_id, SOURCE, TOKEN, action.value, action.seq, TTL_MS)
             except Exception as exc:  # unapplied: keep the old record so the next tick retries
-                log_exception(self.logger, "apply_failed", exc)
+                if not isinstance(exc, InterruptedError):
+                    log_exception(self.logger, "apply_failed", exc)
                 if action.pane_id in old:
                     state["panes"][action.pane_id] = old[action.pane_id]
                 else:

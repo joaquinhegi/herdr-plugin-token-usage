@@ -96,6 +96,9 @@ class Poller:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def is_stopping(self) -> bool:
+        return self._stop.is_set()
+
     def install_signals(self) -> None:
         signal.signal(signal.SIGTERM, lambda *_: self.request_stop())
         signal.signal(signal.SIGINT, lambda *_: self.request_stop())
