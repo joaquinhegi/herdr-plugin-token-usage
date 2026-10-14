@@ -925,3 +925,65 @@ Survived (9): M5 absolute subagent keys, M9 skip subagents, M6 do not persist al
 ### Verdict
 PASS WITH WARNINGS
 127/127 tests pass and the build is clean. All 3 slice 4b tasks are done, and all 12 in-scope scenarios have passing tests. Attribution is safe: the map is rebuilt per tick, each session is read once, and other sessions' subagents are excluded. A 0 is never shown, Herdr failures change nothing, and failed actions are retried. Four warnings remain: an inaccessible transcript still shows its stale total, the tick wiring has test gaps (9 mutations survived), the session schema has drifted from the design, and the test-first order was not followed.
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:cb5b74a13fb93ddc9e6d9a1445642b9db452fb1534005d71b79379d91a528d14
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 8/8
+scenarios: 12/12
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:807b4ed23553f57f8409a2b497588ae2a9a74e043cb935621ae52e20bd7b020d
+build_command: python3 -B -m compileall -q src tests
+build_exit_code: 0
+build_output_hash: sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+```
+
+## Slice 4b Re-verification (bounded correction 43cf743)
+
+**Change**: agent-token-usage-mvp
+**Mode**: Strict TDD
+**Candidate**: branch `slice-4b-tick`, HEAD `43cf743` (tree `2f7262c`), on `96bd1c1`. Diff `git diff 96bd1c1 43cf743`: 6 files, +133/-7 (`claude_locator.py`, `jsonl_tail.py`, `app/tick.py`, `ports.py`, `test_claude_locator.py`, `test_tick.py`).
+**Scope**: Confirms the in-scope slice 4b findings (W1, W2, S1, S3) and looks only for regressions introduced by the correction. W3 (design doc drift, moved to slice 6) and W4 (TDD order, historical) are not part of this correction and stay open. Under the single-correction rule, new non-critical observations are carry-overs. Envelope counts are unchanged from the slice 4b section: 8 requirements and 12 scenarios.
+**Evidence revision**: sha256 over `tree:2f7262c5c9b4d37c631f81a156c49e53e274a2f1\ntest:sha256:<test hash>\nbuild:sha256:<build hash>\n`. The test output contains a wall-clock duration, so its hash is specific to this run.
+**Safety**: herdr, real sockets, real `~/.claude` and the network were never used. Tests, `compileall`, mutations and probes ran only in a `git archive 43cf743` copy in the scratchpad, with `python3 -B`. The repository was not modified (`git status --porcelain` is empty).
+
+### Build & Tests
+- Tests: `python3 -B -m unittest discover` exited 0. It ran 131 tests, all OK (127 earlier plus 3 tick scenarios and 1 locator test).
+- Build: `python3 -B -m compileall -q src tests` exited 0 with empty output (scratch copy only).
+- Coverage: skipped because no coverage tool is installed.
+- Tasks: Slice 4b tasks 4.3, 4.4 and 4.5 remain `[x]` in `tasks.md:70-72`. The correction adds no task.
+
+### Prior Findings
+| Finding | Status | Evidence |
+|---|---|---|
+| W1: unreadable transcript kept its stale total, with no diagnostic | RESOLVED | `jsonl_tail.py:18,31` sets `TailResult.failed=True` when stat or open raises `OSError`, and leaves the position unchanged. `ports.py:23` declares `failed`. `tick.py:78-80` returns None for the whole session when any file (main or subagent) fails, and logs `transcript_unreadable session=<8 chars>`. Test `test_tick.py:190` uses the real `JsonlTail` and `chmod 0` on the main and then on a subagent. It asserts a `clear`, an empty published state, recovery to `1.5k tokens`, 2 diagnostic lines, and no full id or project slug in the log. Independent probe with the real tailer: chmod 0 on the main gives `clear p1` while B keeps publishing. It stays blank 30 s later. After restore plus growth it gives `3.0k` with no double count. chmod 0 on 1 of 2 subagents gives `clear p1`, and restore gives `3.0k`. A session unreadable from its first tick publishes nothing. The log has no full ids and no paths. Mutations N1-N5 and N13 (flag ignored, main only, subagents only, tailer never flags, log removed, `break` that keeps the persisted total) are all KILLED. |
+| W2: tick wiring mutations survived | RESOLVED | Re-run on 43cf743 with the full suite. M5 (absolute subagent key), M9 (skip subagents), M6 (aliases not persisted), M7 (aliases not loaded), M10 (session never saved), M15 (stored positions ignored), M16 (`last_seen` dropped), M17 (persisted seq ignored) are KILLED by `test_session_state_wiring_survives_restart` (`test_tick.py:222`). M18 (full session id in logs) is KILLED in both places: `session_failed` by `test_tick.py:186` and `transcript_unreadable` by `test_tick.py:190`. 9/9 killed. |
+| S1: `locate_failed` logged every tick | RESOLVED | `claude_locator.py:22,42-47` logs only when the reason for that session changes, and success clears the entry. Test `test_claude_locator.py:75` checks 3 calls give 1 line, and missing, found, then missing again gives 2 lines. N10 (always log) and N11 (no reset on success) are KILLED. |
+| S3: save exceptions escaped `tick()` | RESOLVED | `tick.py:50-53` catches the `save_published` failure and logs `save_published_failed`. `tick.py:87-94` catches the `save_session` failure, logs `save_session_failed`, and still returns the total. Test `test_tick.py:212` checks that both failures still publish and log the error type. N6-N9 (narrowed `except`, log removed) are KILLED. |
+
+### Mutation Summary (scratch copy, full suite, `python3 -B`)
+Killed (22): M5, M6, M7, M9, M10, M15, M16, M17, M18a, M18b, N1-N11, N13.
+Survived (1): N12, which logs only the first failure reason per session (`if session_id not in self._last_failure`). A change from missing to ambiguous without a success in between is not tested (S3 below).
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**: None new. W1 and W2 are resolved. W3 (design doc drift, `design.md:62-64`, planned for slice 6) and W4 (test-first order for 4.3/4.4, historical) are still open from the slice 4b section and were not in this correction's scope.
+
+**SUGGESTION** (new, from the correction; carry-over under the single-correction rule):
+1. (S1) `transcript_unreadable` is logged on every tick while a file stays unreadable (`tick.py:79`). Probe: one line per tick, the same pattern the locator fix removed. Apply the same "log on change" approach as in the locator.
+2. (S2) `ClaudeLocator._last_failure` (`claude_locator.py:22`) only shrinks when a session is found again. Ids that never resolve stay forever. Probe: 10,000 distinct failing UUIDs use about 958 KiB (about 96 B each). Keys are validated UUIDs (`claude_locator.py:29`), so each entry is bounded, and the realistic growth is a few failing sessions per day. That is negligible, but there are two side effects: the map is unbounded over the daemon lifetime, and a session that closes and later returns still missing is not logged again. Consider removing entries for sessions that are not in the current tick, or capping the map.
+3. (S3) No test covers a change of reason from missing to ambiguous (N12 survived). Add an assertion for it to `test_claude_locator.py:75`.
+4. (S4) The W1 test is skipped when running as root (`test_tick.py:189`, `skipIf(os.geteuid() == 0)`). In a root CI container the tailer `failed` flag (N4) would lose its only killing test. Add a root-safe variant, for example a directory at the transcript path (`IsADirectoryError`) or a file deleted between locate and read.
+5. (S5) Persistent save failures log on every tick, and with `save_session` failing the stored offsets never advance. Each tick then re-reads all bytes since the last good save. This is idempotent, because the ledger deduplicates, but the cost grows. A file that vanishes between locate and read now blanks the whole session for one tick. That matches the spec ("inaccessible, show nothing") but can flicker on rotation.
+
+### Regressions Introduced by the Correction
+None that block. The early `return None` discards that tick's parsed objects and does not save positions, so the next readable tick re-reads from the last saved offsets with no loss or double count (probe P4: `3.0k`). The `failed` field defaults to `False`, so other `TailResult` producers keep their behavior. A read error after `open` (`fh.read` `OSError`) still propagates to `session_failed` (`tick.py:61`), which is also None. When `save_session` fails, the total is still returned. Before the correction it became `session_failed` and was cleared. This is the intended S3 change.
+
+### Verdict
+PASS WITH WARNINGS
+131/131 tests pass and the build is clean. W1, W2, S1 and S3 are resolved with runtime, probe and mutation evidence (22 of 23 mutations killed, all in-scope ones included). There are no CRITICAL issues and no new warnings. The out-of-scope slice 4b warnings W3 and W4 remain open, and five new suggestions are carried over.
