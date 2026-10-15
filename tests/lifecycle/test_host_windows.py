@@ -1,5 +1,6 @@
 """WindowsHost: file-based parts run everywhere; the msvcrt lock tests run on Windows only."""
 
+import json
 import os
 import subprocess
 import sys
@@ -58,13 +59,25 @@ class StopFileTest(Base):
         self.assertFalse(self.host.supports_socket)
         self.assertEqual(self.host.stop_poll_s, 0.5)
 
-    def test_clear_stop_older_than_keeps_a_newer_request(self):  # W1
-        self.host.request_stop(self.dir, None)
-        mtime = (self.dir / "poller.stop").stat().st_mtime
-        self.host.clear_stop(self.dir, older_than=mtime - 5)  # the request is newer than the stamp
+    def test_request_stop_names_the_poller(self):  # W1
+        self.host.request_stop(self.dir, 4242, 1000.5)
+        self.assertEqual(json.loads((self.dir / "poller.stop").read_text()), {"pid": 4242, "started_at": 1000.5})
+        self.host.request_stop(self.dir, None)  # unverified pid: the file still exists but names nobody
         self.assertTrue(self.host.stop_requested(self.dir))
-        self.host.clear_stop(self.dir, older_than=mtime + 5)  # stale: older than the stamp
-        self.assertFalse(self.host.stop_requested(self.dir))
+
+    def test_clear_stop_keeps_only_a_request_naming_the_caller(self):
+        self.host.request_stop(self.dir, 4242, 1000.5)
+        self.host.clear_stop(self.dir, (4242, 1000.5))
+        self.assertTrue(self.host.stop_requested(self.dir))
+        for other in ((4243, 1000.5), (4242, 999.0)):  # another pid, or a recycled pid of an older run
+            self.host.clear_stop(self.dir, other)
+            self.assertFalse(self.host.stop_requested(self.dir))
+            self.host.request_stop(self.dir, 4242, 1000.5)
+        for junk in ("", "not json", "[]", '{"pid": "4242"}'):
+            (self.dir / "poller.stop").write_text(junk)
+            self.host.clear_stop(self.dir, (4242, 1000.5))
+            self.assertFalse(self.host.stop_requested(self.dir))
+        self.host.clear_stop(self.dir, (4242, 1000.5))  # missing file: no error
 
 
 class SpawnTest(Base):

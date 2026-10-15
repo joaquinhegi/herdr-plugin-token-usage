@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/joaquinhegi/herdr-plugin-token-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/joaquinhegi/herdr-plugin-token-usage/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
-![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20(experimental)-lightgrey)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -18,9 +18,9 @@ A [Herdr](https://herdr.dev) plugin that shows the cumulative token usage of eve
 |---|---|---|
 | macOS | Supported | Tested in CI and validated manually on a live Herdr install |
 | Linux | Supported | Tested in CI; not yet validated manually |
-| Windows | Not supported yet | Herdr reports the plugin as unsupported. Support is in progress ([`openspec/changes/windows-support`](openspec/changes/windows-support)); the test suite already runs on Windows in CI |
+| Windows | Experimental | Tested in CI on `windows-latest`; not yet validated on a real Windows machine with a live Herdr. Needs manual validation before it can be called supported (see [Windows](#windows-experimental)) |
 
-Requirements: Herdr 0.8.2 or later, and Python 3.11 or later available as `python3` on the `PATH` Herdr uses. On macOS, `/usr/bin/python3` is 3.9; install a newer Python (for example with Homebrew) or the plugin exits with a clear message.
+Requirements: Herdr 0.8.2 or later, and Python 3.11 or later available as `python3` on the `PATH` Herdr uses (on Windows, see [Windows](#windows-experimental)). On macOS, `/usr/bin/python3` is 3.9; install a newer Python (for example with Homebrew) or the plugin exits with a clear message.
 
 ## What the number means
 
@@ -61,9 +61,28 @@ herdr plugin action invoke status --plugin local.token-usage
 herdr plugin log list --plugin local.token-usage --limit 1   # running pid=… last_tick=… panes=N
 ```
 
+## Windows (experimental)
+
+Windows support is implemented and tested in CI, but has not been validated on a real machine yet. Treat it as experimental.
+
+- **Python launcher.** The plugin starts through the `py` launcher (`py -3`). Install Python from python.org or with the Python install manager, which provide `py.exe`. A Python installed only from the Microsoft Store does not include `py.exe`.
+- **Python 3.11 or later.** `py -3` selects the newest Python 3 it finds; if that is older than 3.11, the plugin exits with a clear message instead of starting.
+- **Actions.** Windows has its own actions: `start-windows`, `stop-windows` and `status-windows`. Use them instead of `start`, `stop` and `status`:
+
+  ```sh
+  herdr plugin action invoke start-windows --plugin local.token-usage
+  herdr plugin action invoke status-windows --plugin local.token-usage
+  herdr plugin action invoke stop-windows --plugin local.token-usage
+  ```
+
+- **Herdr binary.** `HERDR_BIN_PATH` must be an absolute path to `herdr.exe`. Other file types are rejected.
+- **Herdr config.** The default config path used by `sidebar-patch` is `%APPDATA%\herdr\config.toml` (overridable with `$HERDR_CONFIG_PATH`). On macOS and Linux the default is `$XDG_CONFIG_HOME/herdr/config.toml` when set, else `~/.config/herdr/config.toml`, after `$HERDR_CONFIG_PATH` (same as Herdr).
+- **Transport.** The plugin talks to Herdr through the CLI only; it does not use the Unix socket on Windows.
+- **Stopping.** `stop-windows` asks the poller to exit through a stop file. If the poller does not exit within the wait budget, a guarded force-terminate runs (see [`docs/SECURITY.md`](docs/SECURITY.md)).
+
 ## Show it in the sidebar
 
-Herdr displays `$tokens` only when a sidebar row includes it. Herdr's default sidebar rows ship commented out in `herdr --default-config`, so most configs need this once. Add it to your Herdr config (`~/.config/herdr/config.toml`, or `$HERDR_CONFIG_PATH`):
+Herdr displays `$tokens` only when a sidebar row includes it. Herdr's default sidebar rows ship commented out in `herdr --default-config`, so most configs need this once. Add it to your Herdr config (`~/.config/herdr/config.toml`, `%APPDATA%\herdr\config.toml` on Windows, or `$HERDR_CONFIG_PATH`):
 
 ```toml
 [ui.sidebar.agents]
@@ -107,12 +126,13 @@ every 4 s:  herdr pane list ──► pane → Claude session id (agent_session,
 | Layer | Tests | Scope |
 |---|---|---|
 | Unit | 50 | Token accounting, dedupe ledger, formatting, session mapping, reconcile rules, parsers |
-| Adapters | 75 | Transcript tailer, state store, Claude locator, Herdr CLI and socket clients, logging privacy |
+| Adapters | 79 | Transcript tailer, state store, Claude locator, Herdr CLI and socket clients, logging privacy |
 | Scenarios | 24 | Full poll ticks with fakes: two sessions, resume after restart, corrupt transcripts, Herdr down |
-| Lifecycle | 66 | Daemon lock and handoff, stop and status, entrypoint errors, manifest, sidebar patch |
-| **Total** | **215** | |
+| Lifecycle | 136 | Daemon lock and handoff, host adapters, stop flow, terminate guard, entrypoint errors, manifest, sidebar patch |
+| Support | 3 | Shared test helpers |
+| **Total** | **292** | |
 
-- **CI:** GitHub Actions on Ubuntu, macOS and Windows with Python 3.11 and 3.13. On Windows, 51 POSIX-specific tests are skipped with a reason, for example flock, Unix sockets and file modes.
+- **CI:** GitHub Actions on Ubuntu, macOS and Windows with Python 3.11 and 3.13. On Windows, 35 POSIX-specific tests are skipped with a reason, for example flock, Unix sockets and file modes; on macOS and Linux, 8 Windows-only tests are skipped.
 - **Method:** built test-first. Each slice was verified independently against the spec, including deliberate mutations to confirm the tests catch regressions.
 - **Run locally:**
 
@@ -122,7 +142,7 @@ every 4 s:  herdr pane list ──► pane → Claude session id (agent_session,
 
 ## Security
 
-- Reads only `~/.claude/projects`, read-only, after resolving symlinks and checking the result stays inside that directory.
+- Reads only `~/.claude/projects` (`%USERPROFILE%\.claude\projects` on Windows), read-only, after resolving symlinks and checking the result stays inside that directory.
 - Writes only to the plugin's state directory and to Herdr pane metadata.
 - Runs subprocesses with argument lists only: no shell, absolute verified binary paths, timeouts.
 - Logs contain event names and counts, never transcript content or paths.
@@ -132,16 +152,18 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and residual ris
 ## Operations
 
 - **Logs:** `herdr plugin log list --plugin local.token-usage`, plus `<state dir>/token-usage.log`.
-- **Restart:** run the `stop` action, then `start`.
-- **Disable:** run the `stop` action first, so the poller clears its tokens and exits. Then run `herdr plugin disable local.token-usage`.
-- **Uninstall:** run the `stop` action, then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Remove the plugin state directory if it is left behind.
-- **Shell fallback for stop:** `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop`.
+- **Restart:** run the `stop` action, then `start` (`stop-windows`, then `start-windows` on Windows).
+- **Disable:** run the `stop` action (`stop-windows` on Windows) first, so the poller clears its tokens and exits. Then run `herdr plugin disable local.token-usage`.
+- **Uninstall:** run the `stop` action (`stop-windows` on Windows), then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Remove the plugin state directory if it is left behind.
+- **Shell fallback for stop:** `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop` (on Windows, in PowerShell: `$env:HERDR_PLUGIN_STATE_DIR="<state dir>"; py -3 -B src/main.py stop`).
 - **Revert the sidebar change:** remove the `"$tokens"` entries, or restore the `.bak-*` backup next to the config.
 
 ## Known limitations
 
 - **Claude Code only.** Codex sessions are not tracked yet.
-- **Detached poller.** The plugin keeps a detached background poller. Herdr's plugin docs ask plugins to stop detached processes before their parent command exits. Herdr 0.8.2 does not enforce this; if a future version does, the poller would need a redesign.
+- **Detached poller.** The plugin keeps a detached background poller (on Windows, a background process started with `CREATE_NO_WINDOW`). Herdr's plugin docs ask plugins to stop detached processes before their parent command exits. Herdr 0.8.2 does not enforce this; if a future version does, the poller would need a redesign.
+- **Windows is experimental.** It has not been validated on a real Windows machine with a live Herdr; see [Windows](#windows-experimental).
+- **`CLAUDE_CONFIG_DIR` is not supported (all platforms).** Transcripts are read only from `~/.claude/projects`; a relocated Claude config directory is not followed.
 - **Forced stops leave stale values.** After a forced stop, the sidebar values disappear when their 60 s TTL expires.
 
 ## Development

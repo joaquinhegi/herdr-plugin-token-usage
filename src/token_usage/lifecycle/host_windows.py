@@ -3,10 +3,12 @@
 Byte 0 of poller.lock is locked for the poller's life (the OS drops it when the process dies).
 Locked bytes cannot be read by other handles, so the holder pid is written at PID_OFFSET,
 outside the locked range, where probes and `stop` can still read it. Stop is cooperative:
-`request_stop` creates poller.stop in the state dir and the poller polls for it. If the poller
+`request_stop` writes poller.stop (naming the target poller's pid and started_at) and the poller polls
+for it; at startup a poller clears only a stop file that does not name itself. If the poller
 does not exit, `force_terminate` runs a guarded TerminateProcess (never os.kill).
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -111,20 +113,23 @@ class WindowsHost:
                     creationflags=CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def request_stop(self, d: Path, verified_pid) -> None:
-        (Path(d) / STOP).touch()  # the pid is irrelevant: only the lock holder reads this file
+    def request_stop(self, d: Path, verified_pid, started_at=None) -> None:
+        text = json.dumps({"pid": verified_pid, "started_at": started_at})  # who the request is for
+        (Path(d) / STOP).write_text(text)
 
     def stop_requested(self, d: Path) -> bool:
         return (Path(d) / STOP).exists()
 
-    def clear_stop(self, d: Path, older_than: float | None = None) -> None:
+    def clear_stop(self, d: Path, own: tuple | None = None) -> None:
+        """Remove the stop file; with `own` = (pid, started_at), keep it when it names exactly that poller."""
         path = Path(d) / STOP
-        if older_than is not None:  # keep a request made after the caller's stamp
+        if own is not None:
             try:
-                if path.stat().st_mtime > older_than:
+                named = json.loads(path.read_text())
+                if isinstance(named, dict) and (named.get("pid"), named.get("started_at")) == tuple(own):
                     return
-            except OSError:
-                return
+            except (OSError, ValueError):
+                pass  # unreadable or malformed: stale
         path.unlink(missing_ok=True)
 
     def force_terminate(self, d: Path, pid, started_at) -> bool:
@@ -134,17 +139,26 @@ class WindowsHost:
             return False
         if not self.held(d) or self.holder_pid(d) != pid:  # held() first: a winning probe wipes the stale pid
             return False
-        win32 = self._win32 = self._win32 or Win32()
-        handle = win32.open_process(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, pid)
-        if not handle:
-            return False
-        try:  # the handle pins this process object, so a recycled pid cannot be hit between check and kill
+        handle = None
+        try:
+            win32 = self._win32 = self._win32 or Win32()
+            handle = win32.open_process(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, pid)
+            if not handle:
+                return False
+            # the handle pins this process object, so a recycled pid cannot be hit between check and kill
             created = win32.creation_time(handle)
             if created is None or created > started_at or started_at - created > CREATION_WINDOW_S:
                 return False
             return bool(win32.terminate(handle))
+        except Exception as exc:  # any Win32 failure is a refusal, never a crash of `stop`
+            print(f"token-usage: force terminate refused ({type(exc).__name__})", file=sys.stderr)
+            return False
         finally:
-            win32.close(handle)
+            if handle:
+                try:
+                    win32.close(handle)
+                except Exception:
+                    pass
 
     def install_signal_handlers(self, on_stop) -> None:
         for name in ("SIGINT", "SIGBREAK"):  # no SIGTERM/SIGHUP semantics on Windows

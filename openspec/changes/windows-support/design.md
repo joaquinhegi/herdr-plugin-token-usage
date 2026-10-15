@@ -2,7 +2,7 @@
 
 ## Technical Approach
 
-Move every OS-specific lifecycle primitive out of `daemon.py` behind a `HostPlatform` port. `PosixHost` reproduces current behavior byte for byte; `WindowsHost` uses `msvcrt.locking`, a stop file and a guarded `TerminateProcess`. `main.py` selects the adapter by `os.name`. The detached poller stays (known risk).
+Move every OS-specific lifecycle primitive out of `daemon.py` behind a `HostPlatform` port. `PosixHost` reproduces current behavior byte for byte; `WindowsHost` uses `msvcrt.locking`, a stop file and a guarded `TerminateProcess`. `main.py` selects the adapter by `os.name`. The detached poller stays (known risk), started with `CREATE_NEW_PROCESS_GROUP|CREATE_NO_WINDOW`.
 
 ## Architecture Decisions
 
@@ -29,17 +29,17 @@ class HostPlatform(Protocol):
     def held(self, d: Path) -> bool: ...                    # probe; winner wipes stale identity
     def holder_pid(self, d: Path) -> int | None: ...
     def spawn(self, argv_tail: list[str]) -> None: ...
-    def request_stop(self, d: Path, verified_pid: int | None) -> None: ...
+    def request_stop(self, d: Path, verified_pid: int | None, started_at: float | None = None) -> None: ...
     def stop_requested(self, d: Path) -> bool: ...
-    def clear_stop(self, d: Path) -> None: ...
-    def force_terminate(self, d: Path) -> bool: ...
+    def clear_stop(self, d: Path, own: tuple[int, float] | None = None) -> None: ...  # own=(pid, started_at): keep a request naming it
+    def force_terminate(self, d: Path, pid: int, started_at: float) -> bool: ...
     def install_signal_handlers(self, on_stop) -> None: ...
 ```
 
 | Method | POSIX | Windows |
 |---|---|---|
-| request_stop | `kill(pid, SIGTERM)` iff verified | create `d/poller.stop` (pid ignored) |
-| stop_requested / clear_stop | False / no-op | `exists()` / `unlink(missing_ok)` |
+| request_stop | `kill(pid, SIGTERM)` iff verified | write `d/poller.stop` = `{pid, started_at}` of the target |
+| stop_requested / clear_stop | False / no-op | `exists()` / unlink; with `own`, keeps a file naming exactly `own` |
 | force_terminate | False (current behavior) | guard below, then `TerminateProcess` |
 | install_signal_handlers | TERM/INT → stop, HUP ignored | INT, BREAK → stop; no HUP |
 
@@ -56,7 +56,7 @@ stop (Windows): held? ─no─► "stopped"
 poller: lock ─► record_identity ─► clear_stop ─► loop ─► exit: cleanup ─► clear_stop ─► release
 ```
 
-Stop checks: `Poller.is_stopping()` = `_stop.is_set() or host.stop_requested(dir)` (sets `_stop` when true). `TickService.should_stop` already points at it, so a stop is honored between panes. Between ticks, `_wait(interval)` sleeps in `stop_poll_s` (0.5 s) slices checking `is_stopping()`; POSIX keeps a single `_stop.wait(interval)`. Stale stop files: only `stop` creates one; the daemon deletes it on startup (after taking the lock) and on exit. `status` → `stopping pid=… ` when held and `stop_requested`.
+Stop checks: `Poller.is_stopping()` = `_stop.is_set() or host.stop_requested(dir)` (sets `_stop` when true). `TickService.should_stop` already points at it, so a stop is honored between panes. Between ticks, `_wait(interval)` sleeps in `stop_poll_s` (0.5 s) slices checking `is_stopping()`; POSIX keeps a single `_stop.wait(interval)`. Stale stop files: only `stop` creates one, naming the target `{pid, started_at}`; the poller deletes it on startup (after taking the lock) unless it names this poller, and unconditionally on exit. `status` → `stopping pid=… ` when held and `stop_requested`.
 
 Injection: `daemon.start/stop/status(..., host=)` and `Poller(..., host=)`; `PosixHost(popen=, kill=)` keeps existing test fakes; `tests/lifecycle/fake_host.py` provides `FakeHost` with recorded calls.
 

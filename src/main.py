@@ -36,12 +36,13 @@ def _build_poller(state_dir: Path, bin_path: str, socket_path: str | None):
         def now(self) -> float:
             return time.time()
 
+    projects = Path.home() / ".claude" / "projects"  # fails first (no logger opened) when there is no home
     logger = tlog.make_logger(state_dir)
     host = daemon.default_host()
     socket = HerdrSocket(socket_path) if socket_path and host.supports_socket else None  # Windows: CLI only
     herdr = FallbackHerdr(socket, HerdrCli(bin_path), logger)
     store, clock = StateStore(state_dir), Clock()
-    locator = ClaudeLocator(Path.home() / ".claude" / "projects", logger)
+    locator = ClaudeLocator(projects, logger)
     svc = TickService(herdr, locator, JsonlTail(), store, clock, logger)
     poller = daemon.Poller(state_dir, socket_path or "", svc.tick, herdr, store, clock, logger, host=host)
     svc.should_stop = poller.is_stopping

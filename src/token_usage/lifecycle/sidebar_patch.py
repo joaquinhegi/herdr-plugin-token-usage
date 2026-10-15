@@ -17,6 +17,8 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from token_usage.adapters.atomic import replace_with_retry
+
 TOKEN = '"$tokens"'
 HEADER = re.compile(r"^\s*\[([\w. -]+)\]\s*(#.*)?$")
 
@@ -165,12 +167,24 @@ def apply(path: Path) -> int:
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
-        os.replace(tmp, real)
+        replace_with_retry(tmp, real)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
     print("patched (backup written next to the config)")
     return 0
+
+
+def default_config_path(environ=None, os_name=None, home=None) -> Path:
+    """HERDR_CONFIG_PATH > $XDG_CONFIG_HOME > %APPDATA% (Windows only) > ~/.config. Raises RuntimeError without a home."""
+    env = os.environ if environ is None else environ
+    if env.get("HERDR_CONFIG_PATH"):
+        return Path(env["HERDR_CONFIG_PATH"])
+    if env.get("XDG_CONFIG_HOME"):
+        return Path(env["XDG_CONFIG_HOME"]) / "herdr" / "config.toml"
+    if (os_name or os.name) == "nt" and env.get("APPDATA"):
+        return Path(env["APPDATA"]) / "herdr" / "config.toml"
+    return (home or Path.home)() / ".config" / "herdr" / "config.toml"
 
 
 def main(args: list[str]) -> int:
@@ -179,8 +193,11 @@ def main(args: list[str]) -> int:
     if len(flags) != 1 or (rest and not (len(rest) == 2 and rest[0] == "--config")):
         print("usage: main.py sidebar-patch --print|--apply [--config PATH]", file=sys.stderr)
         return 2
-    env_path = os.environ.get("HERDR_CONFIG_PATH")
-    path = Path(rest[1]) if rest else Path(env_path) if env_path else Path.home() / ".config" / "herdr" / "config.toml"
+    try:
+        path = Path(rest[1]) if rest else default_config_path()
+    except (RuntimeError, KeyError, OSError):
+        print("sidebar-patch: cannot locate the home directory; pass --config PATH", file=sys.stderr)
+        return 1
     if flags[0] == "--apply":
         return apply(path)
     return _emit(plan(path))

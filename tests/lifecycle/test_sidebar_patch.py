@@ -1,3 +1,4 @@
+import io
 import os
 import subprocess
 import sys
@@ -5,6 +6,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from token_usage.lifecycle import sidebar_patch as sp
 from tests.support import child_env, needs_symlink, posix_only
@@ -216,11 +218,64 @@ class TestApply(Base):
         self.assertEqual(self.cfg.stat().st_mode & 0o777, 0o600)
 
 
+class TestDefaultPath(unittest.TestCase):
+    HOME = lambda self: Path("/h")  # noqa: E731
+
+    def resolve(self, env, os_name="posix"):
+        return sp.default_config_path(env, os_name, self.HOME)
+
+    def test_precedence_env_then_xdg_then_appdata_then_home(self):
+        env = {"HERDR_CONFIG_PATH": "/e/c.toml", "XDG_CONFIG_HOME": "/x", "APPDATA": "/a"}
+        self.assertEqual(self.resolve(env, "nt"), Path("/e/c.toml"))
+        del env["HERDR_CONFIG_PATH"]
+        self.assertEqual(self.resolve(env, "nt"), Path("/x/herdr/config.toml"))
+        del env["XDG_CONFIG_HOME"]
+        self.assertEqual(self.resolve(env, "nt"), Path("/a/herdr/config.toml"))
+        self.assertEqual(self.resolve({}, "nt"), Path("/h/.config/herdr/config.toml"))
+
+    def test_appdata_is_ignored_off_windows_and_empty_values_are_unset(self):
+        self.assertEqual(self.resolve({"APPDATA": "/a"}), Path("/h/.config/herdr/config.toml"))
+        env = {"HERDR_CONFIG_PATH": "", "XDG_CONFIG_HOME": ""}
+        self.assertEqual(self.resolve(env), Path("/h/.config/herdr/config.toml"))
+
+    def test_home_is_not_needed_when_a_higher_source_is_set(self):
+        def boom():
+            raise RuntimeError("no home")
+        self.assertEqual(sp.default_config_path({"XDG_CONFIG_HOME": "/x"}, "posix", boom), Path("/x/herdr/config.toml"))
+
+    def test_unresolvable_home_is_a_short_error_without_traceback(self):
+        err = io.StringIO()
+        with mock.patch.object(Path, "home", side_effect=RuntimeError("no home")), \
+                mock.patch.dict(os.environ, {}, clear=True), mock.patch("sys.stderr", err):
+            self.assertEqual(sp.main(["--print"]), 1)
+        self.assertIn("home directory", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
+
+
+class TestApplyReplace(Base):
+    def test_apply_replaces_through_replace_with_retry(self):  # S5
+        self.write(ROWS_ONLY)
+        with mock.patch.object(sp, "replace_with_retry", wraps=sp.replace_with_retry) as m:
+            self.assertEqual(sp.apply(self.cfg), 0)
+        self.assertEqual(m.call_count, 1)
+        self.assertIn("$tokens", self.cfg.read_text())
+
+
 class TestCli(Base):
     def run_cli(self, *args):
-        env = child_env(HOME=str(self.dir))
+        env = self.cli_env()
         return subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", *args], env=env,
                               capture_output=True, text=True, timeout=20)
+
+    def cli_env(self, **extra):
+        """Every config-root variable points inside the temp dir: no real config on any OS."""
+        return child_env(HOME=str(self.dir), APPDATA=str(self.dir / "appdata"),
+                         XDG_CONFIG_HOME=str(self.dir / "xdg"), **extra)
+
+    def test_cli_env_is_isolated_from_real_config_roots(self):
+        env = self.cli_env()
+        for name in ("HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"):
+            self.assertTrue(Path(env[name]).is_relative_to(self.dir), name)
 
     def test_print_and_apply_via_main(self):
         self.write(ROWS_ONLY)
@@ -247,7 +302,7 @@ class TestCli(Base):
 
     def test_default_config_honors_herdr_config_path(self):
         self.write(ROWS_ONLY)
-        env = child_env(HOME=str(self.dir / "nohome"), HERDR_CONFIG_PATH=str(self.cfg))
+        env = self.cli_env(HERDR_CONFIG_PATH=str(self.cfg))
         r = subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", "--print"], env=env,
                            capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
@@ -258,7 +313,6 @@ class TestCli(Base):
         self.assertEqual(r.returncode, 1)
         self.assertNotIn("Traceback", r.stderr)
 
-    @unittest.skipUnless(os.name == "posix", "until windows-support slice 4 adds the Windows config path")
     def test_default_config_is_under_home_and_never_used_by_startup(self):
         r = self.run_cli("--print")  # HOME is a tempdir: no real config touched
         self.assertEqual(r.returncode, 1)

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import os
 import shutil
 import subprocess
@@ -57,6 +58,16 @@ class TestMainErrors(unittest.TestCase):
         for bad in ("herdr", str(plain), str(self.tmp / "missing")):
             self.assertClean(self.run_main("start", HERDR_PLUGIN_STATE_DIR=state, HERDR_BIN_PATH=bad))
         self.assertFalse((self.tmp / "state" / "poller.pid").exists())
+
+    def test_run_without_a_home_directory_is_a_short_error(self):
+        mod = load_main()
+        err = io.StringIO()
+        env = {"HERDR_PLUGIN_STATE_DIR": str(self.tmp / "state"), "HERDR_BIN_PATH": str(self.bin)}
+        with mock.patch.object(Path, "home", side_effect=RuntimeError("no home")), \
+                mock.patch.dict(os.environ, env), mock.patch("sys.stderr", err):
+            self.assertEqual(mod.main(["main.py", "run"]), 1)
+        self.assertIn("cannot start", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
 
 def load_main():

@@ -1,5 +1,6 @@
 """WindowsHost.force_terminate guard logic against a fake Win32 layer: runs on every OS."""
 
+import io
 import os
 import sys
 import unittest
@@ -53,6 +54,29 @@ class StubHost(WindowsHost):
 
 
 class GuardTest(unittest.TestCase):
+    def test_creation_window_boundaries_are_inclusive(self):  # WC1: created == started_at, and exactly 60 s
+        self.assertTrue(self.go(created=STARTED)[0])
+        self.assertTrue(self.go(created=STARTED - 60.0)[0])
+        self.assertFalse(self.go(created=STARTED + 0.001)[0])
+        self.assertFalse(self.go(created=STARTED - 60.001)[0])
+
+    def test_win32_errors_are_a_refusal_logged_by_type_and_the_handle_is_closed(self):  # S7
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            result, calls = self.go(times_error=OSError("boom /secret/path"))
+        self.assertFalse(result)
+        self.assertEqual(calls[-1], ("close", 7))
+        self.assertNotIn(("terminate", 7), calls)
+        self.assertIn("OSError", err.getvalue())
+        self.assertNotIn("secret", err.getvalue())
+
+    def test_a_failing_win32_layer_is_a_refusal(self):
+        class Broken:
+            def open_process(self, *a):
+                raise OSError("no kernel32")
+        host = StubHost(Broken())
+        self.assertFalse(host.force_terminate(Path("/state"), 4242, STARTED))
+
     def go(self, pid=4242, started=STARTED, **kw):
         win32 = FakeWin32(**{k: v for k, v in kw.items() if k in ("handle", "created", "ok", "times_error")})
         host = StubHost(win32, **{k: v for k, v in kw.items() if k in ("held", "holder")})
@@ -101,13 +125,6 @@ class GuardTest(unittest.TestCase):
         result, calls = self.go(ok=False)
         self.assertFalse(result)
         self.assertEqual(calls[-2:], [("terminate", 7), ("close", 7)])
-
-    def test_handle_is_closed_even_if_the_probe_raises(self):
-        host_win32 = FakeWin32(times_error=OSError("boom"))
-        with self.assertRaises(OSError):
-            StubHost(host_win32).force_terminate(Path("/state"), 4242, STARTED)
-        self.assertEqual(host_win32.calls[-1], ("close", 7))
-        self.assertNotIn(("terminate", 7), host_win32.calls)
 
 
 class PosixForceTest(unittest.TestCase):

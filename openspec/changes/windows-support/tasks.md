@@ -63,9 +63,9 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 4: Config path + docs (PR4)
 
-- [ ] 4.1 RED `test_sidebar*`: `HERDR_CONFIG_PATH` > XDG > `%APPDATA%` (nt) > `~/.config`.
-- [ ] 4.2 GREEN `sidebar_patch.py`.
-- [ ] 4.3 `README.md`, `docs/SECURITY.md`: Windows experimental, `py` prerequisite, detached-process risk, `CLAUDE_CONFIG_DIR` gap, `.exe` bin.
+- [x] 4.1 RED `test_sidebar*`: `HERDR_CONFIG_PATH` > XDG > `%APPDATA%` (nt) > `~/.config`.
+- [x] 4.2 GREEN `sidebar_patch.py`.
+- [x] 4.3 `README.md`, `docs/SECURITY.md`: Windows experimental, `py` prerequisite, detached-process risk, `CLAUDE_CONFIG_DIR` gap, `.exe` bin.
 
 ## Slice 5: Manual validation
 
@@ -74,3 +74,6 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 - [ ] 5.3 [APPROVAL] Herdr restart runs startup action.
 - [ ] 5.4 [APPROVAL] Does poller survive Herdr closing? Record whether `CREATE_BREAKAWAY_FROM_JOB` is needed.
 - [ ] 5.5 [APPROVAL] Record `agent_session` values on Windows; no figure when absent.
+- [ ] 5.6 [APPROVAL] Start after a crashed poller (kill python.exe in Task Manager, then `start-windows`).
+- [ ] 5.7 [APPROVAL] Two quick concurrent `start-windows` leave exactly one poller.
+- [ ] 5.8 [APPROVAL] After a failed stop the stop file is gone or harmless (next start/stop works).
