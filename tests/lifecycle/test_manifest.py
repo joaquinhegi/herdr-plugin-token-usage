@@ -46,13 +46,21 @@ class TestManifest(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         self.assertTrue(all(isinstance(a["title"], str) and a["title"] for a in self.m["actions"]))
 
-    def test_no_shell_strings_or_build(self):
-        commands = [s["command"] for s in self.m["startup"]] + [a["command"] for a in self.m["actions"]]
+    def test_build_items_configure_sidebar_per_platform(self):
+        self.assertEqual(self.m["build"], [
+            {"platforms": ["linux", "macos"],
+             "command": ["python3", "-B", "src/main.py", "sidebar-patch", "--install"]},
+            {"platforms": ["windows"],
+             "command": ["py", "-3", "-X", "utf8", "-B", "src/main.py", "sidebar-patch", "--install"]},
+        ])
+
+    def test_no_shell_strings(self):
+        commands = [s["command"] for s in self.m["startup"]] + [a["command"] for a in self.m["actions"]] \
+            + [b["command"] for b in self.m["build"]]
         for cmd in commands:
             self.assertIsInstance(cmd, list)
             self.assertNotIn(cmd[0], ("sh", "bash", "zsh"))
             self.assertTrue(all(isinstance(p, str) and not any(c in p for c in ";|&$`") for p in cmd))
-        self.assertNotIn("build", self.m)
 
 
 if __name__ == "__main__":
