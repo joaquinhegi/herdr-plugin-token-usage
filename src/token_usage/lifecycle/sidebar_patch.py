@@ -1,4 +1,4 @@
-"""Print-first, minimal sidebar patch: adds `$tokens` to existing agent rows only.
+"""Print-first, minimal sidebar patch (plus `--install`, the GitHub-install setup): adds `$tokens` to existing agent rows only.
 
 Rule: extend the last row of `ui.sidebar.agents.rows` and of `rows_by_agent.claude` (each when
 present, a row set already containing `$tokens` anywhere is left alone). It never creates a rows section (that would replace Herdr's
@@ -20,6 +20,10 @@ from pathlib import Path
 from token_usage.adapters.atomic import replace_with_retry
 
 TOKEN = '"$tokens"'
+STYLED_TOKEN = '{ token = "$tokens", fg = "#f9e2af", bold = true }'
+STYLED_VALUE = {"token": "$tokens", "fg": "#f9e2af", "bold": True}
+# Herdr 0.8.2 default rows (`herdr --default-config`) plus the styled token.
+DEFAULT_ROWS = f'[["state_icon", "workspace", "tab"], ["agent", {STYLED_TOKEN}]]'
 HEADER = re.compile(r"^\s*\[([\w. -]+)\]\s*(#.*)?$")
 
 
@@ -93,7 +97,11 @@ def _glue(text: str, at: int) -> str:
     return "" if prev == "[" else " " if prev == "," else ", "
 
 
-def plan(path: Path) -> Plan:
+def _has_token(row) -> bool:
+    return any(x == "$tokens" or (isinstance(x, dict) and x.get("token") == "$tokens") for x in row)
+
+
+def plan(path: Path, styled: bool = False) -> Plan:
     real = Path(os.path.realpath(path))
     try:
         text = real.read_text(encoding="utf-8")
@@ -118,7 +126,7 @@ def plan(path: Path) -> Plan:
     if not targets or any(not isinstance(r, list) or not r or not all(isinstance(x, list) for x in r)
                           for _, _, r in targets):  # shape unknown
         return _refuse("No usable row layout found in [ui.sidebar.agents].", path)
-    todo = [(t, k) for t, k, r in targets if not any("$tokens" in row for row in r)]
+    todo = [(t, k) for t, k, r in targets if not any(_has_token(row) for row in r)]
     if not todo:
         return Plan("noop", message="$tokens is already present.\n")
     spots = [_locate(text, t, k) for t, k in todo]
@@ -126,11 +134,11 @@ def plan(path: Path) -> Plan:
         return _refuse("Row layout uses a form this patch does not edit.", path)
     new = text
     for at in sorted(spots, reverse=True):
-        new = new[:at] + _glue(new, at) + TOKEN + new[at:]
+        new = new[:at] + _glue(new, at) + (STYLED_TOKEN if styled else TOKEN) + new[at:]
     expect = tomllib.loads(text)
     a = expect["ui"]["sidebar"]["agents"]
     for _, k in todo:
-        (a["rows"] if k == "rows" else a["rows_by_agent"]["claude"])[-1].append("$tokens")
+        (a["rows"] if k == "rows" else a["rows_by_agent"]["claude"])[-1].append(STYLED_VALUE if styled else "$tokens")
     return _finish(path, text, new, expect)
 
 
@@ -150,20 +158,18 @@ def _emit(res: Plan) -> int:
     return 1 if res.status == "refuse" else 0
 
 
-def apply(path: Path) -> int:
-    res = plan(path)
-    if res.status != "patch":
-        return _emit(res)
-    real = Path(os.path.realpath(path))  # patch the symlink target; the link stays intact
-    mode = real.stat().st_mode & 0o777
-    backup = real.with_name(f"{real.name}.bak-{time.strftime('%Y%m%dT%H%M%S')}-{time.time_ns() % 10**6:06d}")
-    with open(real, "rb") as src, open(backup, "xb") as fh:
-        shutil.copyfileobj(src, fh)
-    os.chmod(backup, mode)
+def _write(real: Path, text: str, backup: bool) -> None:
+    """Atomic replace; with `backup` the existing file is copied to `.bak-<timestamp>` first."""
+    mode = (real.stat().st_mode & 0o777) if backup else 0o600
+    if backup:
+        bak = real.with_name(f"{real.name}.bak-{time.strftime('%Y%m%dT%H%M%S')}-{time.time_ns() % 10**6:06d}")
+        with open(real, "rb") as src, open(bak, "xb") as fh:
+            shutil.copyfileobj(src, fh)
+        os.chmod(bak, mode)
     fd, tmp = tempfile.mkstemp(dir=real.parent, prefix=f".{real.name}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(res.new_text)
+            fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
@@ -171,7 +177,57 @@ def apply(path: Path) -> int:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def apply(path: Path) -> int:
+    res = plan(path)
+    if res.status != "patch":
+        return _emit(res)
+    _write(Path(os.path.realpath(path)), res.new_text, True)  # patch the symlink target; the link stays intact
     print("patched (backup written next to the config)")
+    return 0
+
+
+def _install_plan(path: Path) -> Plan:
+    real = Path(os.path.realpath(path))
+    try:
+        text = real.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return Plan("create", new_text=f"[ui.sidebar.agents]\nrows = {DEFAULT_ROWS}\n")
+    except (OSError, UnicodeDecodeError):
+        return _refuse("Config cannot be read as a UTF-8 file.", path)
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return _refuse("Config is not valid TOML.", path)
+    ui = data.get("ui", {})
+    sidebar = ui.get("sidebar", {}) if isinstance(ui, dict) else None
+    if isinstance(sidebar, dict) and "agents" not in sidebar:
+        section = f"[ui.sidebar.agents]\nrows = {DEFAULT_ROWS}\n"
+        new = text + ("\n" if text and not text.endswith("\n") else "") + ("\n" if text else "") + section
+        expect = tomllib.loads(text)
+        expect.setdefault("ui", {}).setdefault("sidebar", {})["agents"] = tomllib.loads(section)["ui"]["sidebar"]["agents"]
+        res = _finish(path, text, new, expect)
+        return Plan("append", res.diff, new) if res.status == "patch" else res
+    return plan(path, styled=True)
+
+
+def install(path: Path) -> int:
+    """Configure the sidebar for a GitHub install. Always returns 0: config problems never fail the install."""
+    try:
+        res = _install_plan(path)
+        if res.status in ("create", "append", "patch"):
+            real = Path(os.path.realpath(path))
+            if res.status == "create":
+                real.parent.mkdir(parents=True, exist_ok=True)
+                tomllib.loads(res.new_text)
+            _write(real, res.new_text, res.status != "create")
+            print(f"sidebar configured in {path}; run `herdr server reload-config` to apply it live"
+                  + ("" if res.status == "create" else " (backup written next to the config)"))
+        else:
+            print(res.message, end="")
+    except (OSError, ValueError):
+        print(_manual(path, "The config could not be written."), end="")
     return 0
 
 
@@ -188,16 +244,21 @@ def default_config_path(environ=None, os_name=None, home=None) -> Path:
 
 
 def main(args: list[str]) -> int:
-    flags = [a for a in args if a in ("--print", "--apply")]
-    rest = [a for a in args if a not in ("--print", "--apply")]
+    modes = ("--print", "--apply", "--install")
+    flags = [a for a in args if a in modes]
+    rest = [a for a in args if a not in modes]
     if len(flags) != 1 or (rest and not (len(rest) == 2 and rest[0] == "--config")):
-        print("usage: main.py sidebar-patch --print|--apply [--config PATH]", file=sys.stderr)
+        print("usage: main.py sidebar-patch --print|--apply|--install [--config PATH]", file=sys.stderr)
         return 2
     try:
         path = Path(rest[1]) if rest else default_config_path()
     except (RuntimeError, KeyError, OSError):
-        print("sidebar-patch: cannot locate the home directory; pass --config PATH", file=sys.stderr)
-        return 1
+        msg = "sidebar-patch: cannot locate the home directory; pass --config PATH"
+        print(msg + (" (install continues without configuring the sidebar)" if flags[0] == "--install" else ""),
+              file=sys.stdout if flags[0] == "--install" else sys.stderr)
+        return 0 if flags[0] == "--install" else 1
+    if flags[0] == "--install":
+        return install(path)
     if flags[0] == "--apply":
         return apply(path)
     return _emit(plan(path))

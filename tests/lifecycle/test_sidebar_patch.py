@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -325,6 +326,117 @@ class TestCli(Base):
             self.assertNotIn("sidebar_patch", f.read_text())
         main_src = MAIN.read_text()
         self.assertEqual(main_src.count("import sidebar_patch"), 1)  # lazy import inside the sidebar-patch branch
+
+STYLED = '{ token = "$tokens", fg = "#f9e2af", bold = true }'
+STYLED_DICT = {"token": "$tokens", "fg": "#f9e2af", "bold": True}
+DEFAULT_ROWS = [["state_icon", "workspace", "tab"], ["agent", STYLED_DICT]]
+
+
+class TestInstall(Base):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    run_cli, cli_env = TestCli.run_cli, TestCli.cli_env
+
+    def rows(self, text=None):
+        return tomllib.loads(text if text is not None else self.cfg.read_text())["ui"]["sidebar"]["agents"]
+
+    def backups(self):
+        return [p for p in self.dir.iterdir() if p.name.startswith("config.toml.bak-")]
+
+    def test_constants(self):
+        self.assertEqual(sp.STYLED_TOKEN, STYLED)
+        self.assertEqual(tomllib.loads(f"x = {sp.STYLED_TOKEN}")["x"], STYLED_DICT)
+        self.assertEqual(tomllib.loads(f"x = {sp.DEFAULT_ROWS}")["x"], DEFAULT_ROWS)
+
+    def test_missing_file_is_created_with_parent_dirs(self):
+        cfg = self.dir / "a" / "b" / "config.toml"
+        self.assertEqual(sp.install(cfg), 0)
+        self.assertEqual(self.rows(cfg.read_text())["rows"], DEFAULT_ROWS)
+        self.assertEqual(sorted(p.name for p in cfg.parent.iterdir()), ["config.toml"])
+
+    def test_without_section_appends_and_keeps_everything_else(self):
+        old = self.write('# mine\n[ui]\ntheme = "x"\n[keys]\nq = "quit"')
+        self.assertEqual(sp.install(self.cfg), 0)
+        new = self.cfg.read_text()
+        self.assertTrue(new.startswith(old + "\n"))
+        self.assertEqual(self.rows()["rows"], DEFAULT_ROWS)
+        self.assertEqual(tomllib.loads(new)["keys"], {"q": "quit"})
+        self.assertEqual([b.read_text() for b in self.backups()], [old])
+
+    def test_existing_rows_get_the_styled_token_on_last_row(self):
+        old = self.write(CUSTOM)
+        self.assertEqual(sp.install(self.cfg), 0)
+        a = self.rows()
+        self.assertEqual(a["rows"][-1], ["agent", STYLED_DICT])
+        self.assertEqual(a["rows_by_agent"]["claude"][-1], ["cwd", STYLED_DICT])
+        self.assertIn("# keep me", self.cfg.read_text())
+        self.assertEqual([b.read_text() for b in self.backups()], [old])
+
+    def test_token_in_either_form_is_noop_without_backup(self):
+        for row in ('"$tokens"', STYLED, '{ token = "$tokens" }'):
+            text = self.write(f'[ui.sidebar.agents]\nrows = [["agent", {row}]]\n')
+            self.assertEqual(sp.install(self.cfg), 0)
+            self.assertEqual((self.cfg.read_text(), self.backups()), (text, []))
+
+    def test_install_is_idempotent(self):
+        self.write(ROWS_ONLY)
+        sp.install(self.cfg)
+        once = self.cfg.read_text()
+        sp.install(self.cfg)
+        self.assertEqual((self.cfg.read_text(), len(self.backups())), (once, 1))
+
+    def test_unsafe_configs_print_manual_steps_exit_zero_and_write_nothing(self):
+        for text in ("not = [valid", "[ui.sidebar.agents]\nspacing = 1\n", "ui = 1\n",
+                     "ui = { sidebar = {} }\n"):
+            self.write(text)
+            self.assertEqual(sp.install(self.cfg), 0)
+            self.assertIn("Manual steps", sys.stdout.getvalue())
+            self.assertEqual((self.cfg.read_text(), self.backups()), (text, []))
+
+    def test_unreadable_config_exits_zero(self):
+        self.assertEqual(sp.install(self.dir), 0)  # a directory
+
+    def test_write_failure_exits_zero_and_leaves_config(self):
+        old = self.write(ROWS_ONLY)
+        with mock.patch.object(sp, "replace_with_retry", side_effect=OSError("boom")):
+            self.assertEqual(sp.install(self.cfg), 0)
+        self.assertEqual(self.cfg.read_text(), old)
+        self.assertFalse([p for p in self.dir.iterdir() if p.name.startswith(".config.toml.")])
+
+    def test_print_and_apply_recognize_inline_table_token(self):
+        self.write(f'[ui.sidebar.agents]\nrows = [["agent", {STYLED}]]\n')
+        self.assertEqual(sp.plan(self.cfg).status, "noop")
+        self.assertEqual(sp.apply(self.cfg), 0)
+        self.assertEqual(self.backups(), [])
+
+    def test_print_still_inserts_the_plain_string(self):
+        self.write(ROWS_ONLY)
+        self.assertIn('"$tokens"', sp.plan(self.cfg).new_text)
+        self.assertNotIn("fg =", sp.plan(self.cfg).new_text)
+
+    def test_cli_install_exit_zero_creates_config(self):
+        cfg = self.dir / "new" / "config.toml"
+        r = self.run_cli("--install", "--config", str(cfg))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.rows(cfg.read_text())["rows"], DEFAULT_ROWS)
+
+    def test_cli_install_without_home_exits_zero(self):
+        with mock.patch.object(sp, "default_config_path", side_effect=RuntimeError):
+            self.assertEqual(sp.main(["--install"]), 0)
+        self.assertIn("--config", sys.stdout.getvalue())
+
+    @unittest.skipUnless(shutil.which("herdr"), "herdr not on PATH")
+    def test_herdr_config_check_accepts_created_config(self):
+        sp.install(self.cfg)
+        env = child_env(HOME=str(self.dir), USERPROFILE=str(self.dir), APPDATA=str(self.dir / "appdata"),
+                        XDG_CONFIG_HOME=str(self.dir / "xdg"), HERDR_CONFIG_PATH=str(self.cfg))
+        r = subprocess.run([shutil.which("herdr"), "config", "check"], env=env, capture_output=True,
+                           text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
 
 if __name__ == "__main__":
