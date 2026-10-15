@@ -63,9 +63,9 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 4: Config path + docs (PR4)
 
-- [ ] 4.1 RED `test_sidebar*`: `HERDR_CONFIG_PATH` > XDG > `%APPDATA%` (nt) > `~/.config`.
-- [ ] 4.2 GREEN `sidebar_patch.py`.
-- [ ] 4.3 `README.md`, `docs/SECURITY.md`: Windows experimental, `py` prerequisite, detached-process risk, `CLAUDE_CONFIG_DIR` gap, `.exe` bin.
+- [x] 4.1 RED `test_sidebar*`: `HERDR_CONFIG_PATH` > XDG > `%APPDATA%` (nt) > `~/.config`.
+- [x] 4.2 GREEN `sidebar_patch.py`.
+- [x] 4.3 `README.md`, `docs/SECURITY.md`: Windows experimental, `py` prerequisite, detached-process risk, `CLAUDE_CONFIG_DIR` gap, `.exe` bin.
 
 ## Slice 5: Manual validation
 
