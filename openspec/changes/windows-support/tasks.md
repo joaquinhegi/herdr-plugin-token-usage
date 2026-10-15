@@ -47,12 +47,13 @@ Delivery: auto-chain; one branch + PR per slice against protected `main`, squash
 
 ## Slice 2b: Terminate + manifest (PR2b)
 
-- [ ] 2.5 RED terminate guard: mismatched pid, unheld lock, creation time after `started_at` or >60 s → no terminate.
-- [ ] 2.6 GREEN `WindowsHost.force_terminate` (ctypes, same handle); daemon force step after 8 s, wait 2 s.
-- [ ] 2.7 RED `HerdrCli`: `CREATE_NO_WINDOW` asserted; `.cmd`/`.bat` rejected, `.exe` required on Windows.
-- [ ] 2.8 GREEN `herdr_cli.py`; `main.py` selects host, no `HerdrSocket` if `not supports_socket`.
-- [ ] 2.9 RED `test_manifest.py`: item `platforms`, top-level adds `windows`, `*-windows` argv `py -3 -X utf8 -B`.
-- [ ] 2.10 GREEN `herdr-plugin.toml` (after PR #1 merged).
+- [x] 2.5 RED terminate guard: mismatched pid, unheld lock, creation time after `started_at` or >60 s → no terminate.
+- [x] 2.6 GREEN `WindowsHost.force_terminate` (ctypes, same handle); daemon force step after 8 s, wait 2 s.
+- [x] 2.7 RED `HerdrCli`: `CREATE_NO_WINDOW` asserted; `.cmd`/`.bat` rejected, `.exe` required on Windows.
+- [x] 2.8 GREEN `herdr_cli.py`; `main.py` selects host, no `HerdrSocket` if `not supports_socket`.
+- [x] 2.9 RED `test_manifest.py`: item `platforms`, top-level adds `windows`, `*-windows` argv `py -3 -X utf8 -B`.
+- [x] 2.10 GREEN `herdr-plugin.toml` (after PR #1 merged).
+- [x] 2.10a Carry-overs: W1 conditional stop-file clear (`clear_stop(d, older_than)`), W2 default `_wait` test, W3 `daemon.default_host` (no `os.kill` on Windows), S1 `_safely` around `clear_stop`, S2 SIGTERM/SIGHUP not registered on Windows; `test_main` unwritable/bad-bin unskipped on Windows. Still skipped on Windows: `test_herdr_cli` shebang tests and `FallbackTest` (HerdrCli has no launcher; argv semantics not changed for tests).
 
 ## Slice 3: Portability + CI (PR3)
 
