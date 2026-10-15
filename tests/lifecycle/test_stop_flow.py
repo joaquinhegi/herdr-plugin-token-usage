@@ -1,6 +1,7 @@
 """Cooperative stop flow (stop file) through FakeHost: runs on every OS."""
 
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -79,6 +80,10 @@ class ForceTerminateFlowTest(StopWaitTest):
         self.assertEqual((result, len(sleeps)), ("failed", 3))
         self.assertEqual(len([c for c in host.calls if c[0] == "force_terminate"]), 1)
 
+    def test_refused_force_after_the_poller_exited_meanwhile_is_stopped(self):  # S1
+        host = FakeHost(holder=4242, stop_file=True, force_result=False, free_on_force=True)
+        self.assertEqual(self.run_stop(host, wait=3)[0], "stopped")
+
     def test_no_force_when_the_poller_exits_cooperatively(self):
         host = FakeHost(holder=4242, stop_file=True, free_after=1, force_result=True)
         self.assertEqual(self.run_stop(host)[0], "stopped")
@@ -124,28 +129,34 @@ class PollerStopFileTest(Base):
         names = [c[0] for c in host.calls if c[0] in ("acquire_lock", "record_identity", "clear_stop", "release")]
         self.assertEqual(names, ["acquire_lock", "record_identity", "clear_stop", "clear_stop", "release"])
 
-    def test_a_stop_request_made_after_the_startup_timestamp_survives(self):  # W1: stop racing a restart
-        host = FakeHost(stop_file=True)
-        host.stop_flag, host.stop_mtime = True, 200.0
-        p = self.poller(lambda: self.fail("must not tick"), host=host, wall=lambda: 100.0)
-        p.run()
-        self.assertIn(("clear_stop", 100.0), host.calls)  # conditional clear, stamped before acquire_lock
-        self.assertLess(host.calls.index(("acquire_lock",)), host.calls.index(("clear_stop", 100.0)))
+    def stop_naming(self, host, pid, started_at):
+        host.stop_flag, host.stop_owner = True, (pid, started_at)
 
-    def test_a_stop_file_older_than_the_timestamp_is_cleared(self):
+    def test_a_stop_naming_this_poller_survives_the_startup_clear(self):  # W1: identity, not mtime
         host = FakeHost(stop_file=True)
-        host.stop_flag, host.stop_mtime = True, 50.0
-        ticks = []
-        self.poller(lambda: ticks.append(1), host=host, wall=lambda: 100.0).run()
-        self.assertEqual(len(ticks), 1)
+        self.stop_naming(host, os.getpid(), self.clock.t)  # same pid and started_at as the new poller
+        self.poller(lambda: self.fail("must not tick"), host=host).run()
+        self.assertIn(("clear_stop", (os.getpid(), self.clock.t)), host.calls)
+        self.assertFalse(host.stop_flag)  # S2: cleared on exit
 
-    def test_the_wall_stamp_is_taken_before_acquire_lock(self):
-        order = []
+    def test_a_stop_naming_another_pid_or_run_is_stale_and_cleared(self):
+        for owner in ((os.getpid() + 1, 1000.0), (os.getpid(), 999.0), (None, None)):
+            host = FakeHost(stop_file=True)
+            self.stop_naming(host, *owner)
+            ticks = []
+            self.poller(lambda: ticks.append(1), host=host).run()
+            self.assertEqual(len(ticks), 1, owner)
+
+    def test_the_stop_file_is_cleared_when_the_poller_exits(self):  # S2
         host = FakeHost(stop_file=True)
-        orig = host.acquire_lock
-        host.acquire_lock = lambda d: (order.append("acquire"), orig(d))[1]
-        self.poller(lambda: None, host=host, wall=lambda: order.append("stamp") or 1.0).run()
-        self.assertEqual(order[:2], ["stamp", "acquire"])
+        self.poller(lambda: setattr(host, "stop_flag", True), host=host).run()
+        self.assertFalse(host.stop_flag)
+        self.assertEqual(host.calls[-2:], [("clear_stop", None), ("release",)])
+
+    def test_request_stop_names_the_verified_poller_with_its_started_at(self):
+        host = FakeHost(holder=4242, stop_file=True, free_after=1)
+        StopWaitTest.run_stop(self, host)
+        self.assertEqual(host.stop_owner, (4242, 1.0))
 
     def test_clear_stop_failure_cannot_skip_the_lock_release(self):  # S1
         host = FakeHost(stop_file=True)

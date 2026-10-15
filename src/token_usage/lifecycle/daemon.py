@@ -69,14 +69,14 @@ def _write_pidfile(state_dir: Path, info: dict) -> None:
 class Poller:
     def __init__(self, state_dir, socket_path, tick, herdr, store, clock, logger,
                  sleep=None, interval=INTERVAL_S, orphan_after=ORPHAN_S,
-                 lock_sleep=time.sleep, mono=time.monotonic, host=None, wall=time.time):
+                 lock_sleep=time.sleep, mono=time.monotonic, host=None):
         self.dir, self.socket_path = Path(state_dir), socket_path
         self.tick, self.herdr, self.store, self.clock, self.logger = tick, herdr, store, clock, logger
         self._stop = threading.Event()
         self._sleep = sleep or self._wait
         self.interval, self.orphan_after = interval, orphan_after
         self._lock_sleep, self._mono = lock_sleep, mono
-        self.host, self._wall = host or default_host(), wall
+        self.host = host or default_host()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -102,7 +102,6 @@ class Poller:
         self.host.install_signal_handlers(self.request_stop)
 
     def run(self) -> int:
-        began = self._wall()  # a stop request newer than this belongs to this run (restart race)
         fd = self.host.acquire_lock(self.dir)
         for _ in range(LOCK_TRIES):
             if fd is not None:
@@ -113,9 +112,9 @@ class Poller:
             return 0  # another poller owns the lock
         self.host.record_identity(fd, os.getpid())
         try:
-            # a stop request left by a crashed run must not stop this one; a newer one must survive
-            self._safely("clear_stop_failed", lambda: self.host.clear_stop(self.dir, began))
             info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
+            # a stop request left by an older run must not stop this one; one naming this poller must survive
+            self._safely("clear_stop_failed", lambda: self.host.clear_stop(self.dir, (info["pid"], info["started_at"])))
             _write_pidfile(self.dir, info)
             self._loop(info)
         finally:
@@ -190,11 +189,11 @@ def _verified_pid(state_dir, host):
 
 def _terminate(state_dir, sleep, clock, wait, host) -> bool:
     pid, started_at = _verified_pid(state_dir, host), read_pidfile(state_dir).get("started_at")
-    host.request_stop(state_dir, pid)
+    host.request_stop(state_dir, pid, started_at)
     if _wait_free(state_dir, sleep, clock, wait, host):
         return True
     if pid is None or not host.force_terminate(state_dir, pid, started_at):
-        return False
+        return not host.held(state_dir)  # refused: the poller may have exited on its own meanwhile
     return _wait_free(state_dir, sleep, clock, FORCE_WAIT_S, host)
 
 

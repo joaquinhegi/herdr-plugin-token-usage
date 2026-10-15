@@ -52,7 +52,7 @@ class PosixHost:
         self._popen([sys.executable, "-B", *argv_tail], start_new_session=True, close_fds=True,
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def request_stop(self, d: Path, verified_pid) -> None:
+    def request_stop(self, d: Path, verified_pid, started_at=None) -> None:
         if verified_pid is None:
             return
         try:
@@ -63,7 +63,7 @@ class PosixHost:
     def stop_requested(self, d: Path) -> bool:
         return False
 
-    def clear_stop(self, d: Path, older_than: float | None = None) -> None:
+    def clear_stop(self, d: Path, own: tuple | None = None) -> None:
         pass
 
     def force_terminate(self, d: Path, pid, started_at) -> bool:

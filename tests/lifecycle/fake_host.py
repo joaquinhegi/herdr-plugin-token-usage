@@ -14,7 +14,7 @@ class FakeHost:
         self.free_after = free_after  # stop-file mode: holder frees after this many held() polls
         self.stop_poll_s = stop_poll_s
         self.stop_flag = False
-        self.stop_mtime: float | None = None  # mtime of the stop file; None = unknown (always clearable)
+        self.stop_owner: tuple | None = None  # (pid, started_at) named by the stop file; None = names nobody
         self.clear_error: Exception | None = None
         self.force_result, self.free_on_force = force_result, free_on_force
         self._polls = 0
@@ -49,27 +49,28 @@ class FakeHost:
     def spawn(self, argv_tail: list[str]) -> None:
         self.calls.append(("spawn", list(argv_tail)))
 
-    def request_stop(self, d: Path, verified_pid) -> None:
+    def request_stop(self, d: Path, verified_pid, started_at=None) -> None:
         self.calls.append(("request_stop", verified_pid))
         if self.stop_file:
             self.stop_flag = self.holder is not None
+            self.stop_owner = (verified_pid, started_at)
         elif verified_pid is not None:
             self.holder = None  # a real stop only reaches a verified poller, which then drops its lock
 
     def stop_requested(self, d: Path) -> bool:
         return self.stop_file and self.stop_flag
 
-    def clear_stop(self, d: Path, older_than: float | None = None) -> None:
-        self.calls.append(("clear_stop", older_than))
+    def clear_stop(self, d: Path, own: tuple | None = None) -> None:
+        self.calls.append(("clear_stop", own))
         if self.clear_error is not None:
             raise self.clear_error
-        if older_than is not None and self.stop_mtime is not None and self.stop_mtime > older_than:
-            return  # a request made after `older_than` is not stale
+        if own is not None and self.stop_owner == own:
+            return  # a request naming this poller is not stale
         self.stop_flag = False
 
     def force_terminate(self, d: Path, pid, started_at) -> bool:
         self.calls.append(("force_terminate", pid, started_at))
-        if self.force_result and self.free_on_force:
+        if self.free_on_force:  # also when refused: the poller may have exited on its own meanwhile
             self.holder = None
         return self.force_result
 
