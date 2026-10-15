@@ -64,7 +64,7 @@ class Poller:
         self.dir, self.socket_path = Path(state_dir), socket_path
         self.tick, self.herdr, self.store, self.clock, self.logger = tick, herdr, store, clock, logger
         self._stop = threading.Event()
-        self._sleep = sleep or self._stop.wait
+        self._sleep = sleep or self._wait
         self.interval, self.orphan_after = interval, orphan_after
         self._lock_sleep, self._mono = lock_sleep, mono
         self.host = host or PosixHost()
@@ -73,7 +73,21 @@ class Poller:
         self._stop.set()
 
     def is_stopping(self) -> bool:
+        if not self._stop.is_set() and self.host.stop_requested(self.dir):
+            self._stop.set()  # cooperative stop (stop file): latch it
         return self._stop.is_set()
+
+    def _wait(self, seconds: float) -> None:
+        slice_s = self.host.stop_poll_s
+        if slice_s is None:
+            self._stop.wait(seconds)  # signals wake the loop
+            return
+        deadline = self._mono() + seconds
+        while not self.is_stopping():
+            left = deadline - self._mono()
+            if left <= 0:
+                return
+            self._stop.wait(min(slice_s, left))
 
     def install_signals(self) -> None:
         self.host.install_signal_handlers(self.request_stop)
@@ -88,19 +102,21 @@ class Poller:
         if fd is None:
             return 0  # another poller owns the lock
         self.host.record_identity(fd, os.getpid())
+        self.host.clear_stop(self.dir)  # a stop request left by a crashed run must not stop this one
         info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
         try:
             _write_pidfile(self.dir, info)
             self._loop(info)
         finally:
             self._cleanup()
+            self.host.clear_stop(self.dir)
             self.host.release(fd)
         return 0
 
     def _loop(self, info: dict) -> None:
         down_since = None
         pruned = None
-        while not self._stop.is_set():
+        while not self.is_stopping():
             now = self.clock.now()
             if pruned is None or now - pruned >= PRUNE_S:
                 pruned = now
@@ -188,10 +204,12 @@ def stop(state_dir, kill=os.kill, sleep=time.sleep, clock=time.monotonic, wait=W
 
 
 def status(state_dir, store, host=None) -> str:
-    if not (host or PosixHost()).held(Path(state_dir)):
+    host = host or PosixHost()
+    if not host.held(Path(state_dir)):
         return "stopped"
     info = read_pidfile(state_dir)
     tick = info.get("last_tick")
     when = datetime.fromtimestamp(tick, timezone.utc).strftime("%H:%M:%SZ") if isinstance(tick, (int, float)) else "none"
     panes = (store.load_published() or {}).get("panes", {})
-    return f"running pid={info.get('pid')} last_tick={when} panes={len(panes)}"
+    state = "stopping" if host.stop_requested(Path(state_dir)) else "running"
+    return f"{state} pid={info.get('pid')} last_tick={when} panes={len(panes)}"

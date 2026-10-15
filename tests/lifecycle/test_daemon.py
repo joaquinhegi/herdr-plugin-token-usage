@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 from token_usage.adapters import log as tlog  # noqa: E402
 from token_usage.adapters.state_store import StateStore  # noqa: E402
 from token_usage.lifecycle import daemon  # noqa: E402
+from token_usage.lifecycle.host_posix import PosixHost  # noqa: E402
+from token_usage.lifecycle.host_windows import WindowsHost  # noqa: E402
 from tests.support import child_env, posix_only, time_limit  # noqa: E402
 
 MAIN = Path(__file__).resolve().parents[2] / "src" / "main.py"
@@ -43,6 +45,8 @@ class Base(unittest.TestCase):
         self.logger = tlog.make_logger(self.dir / "logs", "t_daemon_%d" % id(self))
         self.addCleanup(tlog.close_logger, self.logger)
         self.store, self.clock, self.herdr = StateStore(self.dir), FakeClock(), FakeHerdr()
+        self.host = WindowsHost() if os.name == "nt" else PosixHost()
+        self._held = set()
 
     def poller(self, tick, sleeps=1, **kw):
         box = {}
@@ -55,32 +59,29 @@ class Base(unittest.TestCase):
 
         p = daemon.Poller(self.dir, "/sock/a", tick, self.herdr, self.store, self.clock, self.logger,
                           sleep=sleep, orphan_after=kw.get("orphan_after", 300),
-                          lock_sleep=kw.get("lock_sleep", lambda s: None), mono=kw.get("mono", time.monotonic))
+                          lock_sleep=kw.get("lock_sleep", lambda s: None), mono=kw.get("mono", time.monotonic),
+                          host=kw.get("host") or self.host)
         box["p"] = p
         return p
 
     def hold_lock(self, pid=None):
-        """Hold the lock like a probe; with pid, like a daemon that recorded itself in the lock file."""
-        import fcntl
-        fd = os.open(self.dir / daemon.LOCK, os.O_CREAT | os.O_RDWR, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        """Hold the lock like a probe; with pid, like a daemon that recorded itself as the holder."""
+        handle = self.host.acquire_lock(self.dir)
+        self._held.add(handle)
         if pid is not None:
-            os.write(fd, str(pid).encode())
-        self.addCleanup(lambda: Path(f"/dev/fd/{fd}").exists() and self._close(fd))
-        return fd
+            self.host.record_identity(handle, pid)
+        self.addCleanup(self.release_lock, handle)
+        return handle
 
-    @staticmethod
-    def _close(fd):
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+    def release_lock(self, handle):
+        if handle in self._held:
+            self._held.remove(handle)
+            self.host.release(handle)
 
     def write_pid(self, pid, sock="/sock/a"):
         (self.dir / daemon.PID).write_text(json.dumps({"pid": pid, "socket_path": sock, "started_at": 1.0, "last_tick": 2.0}))
 
 
-@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestRun(Base):
     def test_second_run_exits_zero_without_ticking(self):
         self.hold_lock()
@@ -120,7 +121,7 @@ class TestRun(Base):
         herdr.report = lambda *a: (time.sleep(0.2), orig(*a))[1]  # 20 panes x 0.2 s = 4 s tick
         svc = TickService(herdr, ClaudeLocator(self.dir / "projects", self.logger), JsonlTail(), self.store,
                           self.clock, self.logger)
-        p = daemon.Poller(self.dir, "/sock/a", svc.tick, herdr, self.store, self.clock, self.logger)
+        p = daemon.Poller(self.dir, "/sock/a", svc.tick, herdr, self.store, self.clock, self.logger, host=self.host)
         svc.should_stop = p.is_stopping
         threading.Timer(0.5, p.request_stop).start()
         began = time.monotonic()
@@ -149,7 +150,6 @@ class TestRun(Base):
         self.assertEqual(len(calls), 5)
 
 
-@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestRunHardening(Base):
     def test_run_retries_lock_so_a_probe_collision_leaves_a_poller(self):
         fd = self.hold_lock()
@@ -158,7 +158,7 @@ class TestRunHardening(Base):
         def lock_sleep(s):
             sleeps.append(s)
             if len(sleeps) == 3:
-                os.close(fd)  # the probe finishes
+                self.release_lock(fd)  # the probe finishes
 
         self.poller(lambda: calls.append(1), lock_sleep=lock_sleep).run()
         self.assertEqual(len(calls), 1)
@@ -248,7 +248,7 @@ class TestStart(Base):
 
         def kill(pid, sig):
             sent.append((pid, sig))
-            os.close(fd)  # the old daemon exits and drops its lock
+            self.release_lock(fd)  # the old daemon exits and drops its lock
 
         self.assertEqual(self.start("/sock/b", kill), "restarted")
         self.assertEqual(sent, [(4242, signal.SIGTERM)])
@@ -280,7 +280,7 @@ class TestStart(Base):
             sent = []
             daemon.stop(self.dir, kill=lambda p, s: sent.append(p), sleep=lambda s: None, clock=self.clock.now, wait=0)
             self.assertEqual(sent, [], pid)
-            os.close(fd)
+            self.release_lock(fd)
 
     def test_probe_clears_stale_lock_file_pid(self):
         (self.dir / daemon.LOCK).write_text("4242")  # daemon was SIGKILLed
@@ -303,20 +303,19 @@ class TestStart(Base):
         self.assertEqual(FakePopen.calls, [])
 
 
-@posix_only  # real PosixHost flock; WindowsHost parity lands in slice 2a
 class TestStatus(Base):
     def test_status_shows_only_pid_tick_and_count(self):
         self.hold_lock()
         self.write_pid(4242, sock="/very/secret/sock")
         self.store.save_published({"seq": 1, "panes": {"p1": {}, "p2": {}}})
-        out = daemon.status(self.dir, self.store)
+        out = daemon.status(self.dir, self.store, host=self.host)
         self.assertIn("pid=4242", out)
         self.assertIn("panes=2", out)
         self.assertNotIn("/", out.replace("1970-01-01", ""))
         self.assertNotIn("secret", out)
 
     def test_status_stopped(self):
-        self.assertEqual(daemon.status(self.dir, self.store), "stopped")
+        self.assertEqual(daemon.status(self.dir, self.store, host=self.host), "stopped")
 
 
 @posix_only  # real flock daemon + shebang fake bin; Windows gets its own in slice 2a/2b
