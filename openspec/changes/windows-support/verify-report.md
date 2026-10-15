@@ -291,3 +291,164 @@ Envelope `fail` means the change-wide evidence is incomplete (1/11 requirements,
 
 Slice 3 verdict: PASS WITH WARNINGS
 POSIX coverage is unchanged: 210/210 baseline tests still pass, plus 5 new, with 0 skips on macOS/ubuntu. The matrix is green on 6/6 jobs, 51 Windows skips are all reasoned, and the CI workflow is pinned and read-only. The slice-1 carry-overs W2 (mutants A5/A6/A7), H6 and S4 are closed; only D3 remains (W1 above).
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:571dd9d3a89021eb70093ce511f4eb64cbd29646de75343528c6d557ae64b07b
+verdict: fail
+blockers: 0
+critical_findings: 0
+requirements: 1/11
+scenarios: 9/26
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:d421c1ccffd30ac24c1d505f3ba98013f54f15b1983c4c8836a9b27009bd5faa
+build_command: python3 -B -c "import ast,pathlib; [ast.parse(p.read_text(), str(p)) for p in pathlib.Path('src').rglob('*.py')]; print('build ok')"
+build_exit_code: 0
+build_output_hash: sha256:5c3d57cf803c92ff537694cda191d9c10c44f33c39eaf5f45e91e34f6413e254
+```
+
+## Verification Report
+
+**Change**: windows-support, Slice 2a (WindowsHost lock/identity/stop file, cooperative stop, stopping status)
+**Candidate**: branch `win-2a-windows-host` (PR #4), HEAD `c7dad95`, tree `363ce6a6`; scope `git diff origin/main win-2a-windows-host` (`311218d..c7dad95`: 10f7520, 7c20152, c7dad95; 9 files, +472/-36, overage accepted by the user).
+**Mode**: Strict TDD (runner: unittest)
+**Scope note**: Totals (11 requirements, 26 scenarios, counted from the three delta specs) are change-wide. Slices 2b, 4 and 5 are pending, so the incomplete counts are expected and do not block this slice. evidence_revision = sha256 of (tree, test output hash, build output hash).
+**Process note**: PR #4 was already MERGED (merge commit `0a8117d`, 2026-10-15T05:34:33Z) before this verification ran. This is a post-merge verification of the same head `c7dad95`.
+
+### Completeness (Slice 2a)
+| Metric | Value |
+|--------|-------|
+| Tasks total (2.1, 2.2, 2.3, 2.4, 2.4a) | 5 |
+| Tasks complete | 5 |
+| Tasks incomplete | 0 |
+Later-slice tasks (2.5-2.10, 4.x, 5.x) are unchecked by design. Task 2.1 is checked, but one of its listed items ("liveness never `os.kill`") has no test (W3).
+
+### Build & Tests Execution
+All local runs used `git archive` copies under the session scratchpad, `python3 -B` (Homebrew 3.14.8), and an `os.kill` guard (`sitecustomize`, blocks pids < 20000 and the user's poller 59645). The repository was not written. The guard log stayed empty.
+
+**Build**: Passed (AST parse of `src/**/*.py`, exit 0).
+
+**Tests (macOS, local)**: 243 run, 239 passed, 0 failed, 4 skipped (exit 0). The 4 skips are the nt-only `LockTest` (3) and `CrossProcessTest` (1). Baseline `origin/main` (`311218d`): 215 passed.
+Per-test outcome diff (custom result collector, base vs candidate): all 215 baseline test ids are `ok` on both trees. The candidate adds 28 ids: 24 `ok`, 4 nt-only skips. No baseline test changed outcome.
+
+**CI (GitHub Actions run 38637551697, head `c7dad95`)**: 6/6 jobs green.
+| Job | Result |
+|-----|--------|
+| ubuntu / macos x 3.11, 3.13 | `Ran 243 tests` OK |
+| windows-latest 3.11 (job 116104463889), 3.13 (job 116104463819) | `Ran 243 tests ... OK (skipped=37)` |
+Windows log confirms the nt-only tests ran: `LockTest` x3 and `CrossProcessTest.test_live_holder_blocks_and_a_killed_holder_frees_the_lock` all `... ok` on both Windows jobs. `test_daemon` on Windows: TestRun 7 ok, TestRunHardening 5 ok (1 skip: signal handlers), TestStatus 2 ok, TestStart 9 skipped, TestRealSpawn 1 skipped. Skips went from 51 to 37, and the 14 unskipped tests are exactly TestRun + TestRunHardening (excluding signals) + TestStatus, all using the real `WindowsHost` through `hold_lock`.
+
+**Coverage**: Not available.
+
+### msvcrt lock semantics (focus 1)
+| Step | Code | Result |
+|------|------|--------|
+| Lock | `host_windows.py:35-36` `lseek(0)` then `locking(LK_NBLCK, 1)` | Correct. Byte 0 from position 0; on failure the fd is closed (`:38`). The `lseek` is redundant on a freshly opened fd but defensive. |
+| Identity write | `:42-44` `lseek(16)` then 16-byte write; position ends at 32 | Correct. Never touches byte 0. |
+| Release | `:51` blank identity (seek 16) while locked, then `:53` `lseek(0)`, then `:54` `LK_UNLCK` 1 byte, `finally` close (`:56`) | Correct order. The re-seek to 0 happens AFTER the offset-16 write, so the unlock targets byte 0. If unlock ever raised, the `finally` close still drops the lock. On real Windows a wrong-range unlock raises `OSError`, so `test_second_lock_fails_until_release_and_release_wipes_identity` would error. It passed on both Windows jobs. |
+| Probe | `:58-63` acquire; if won, `release` blanks the stale pid | Correct. It wipes only when it wins (`test_probe_wipes_a_stale_identity_when_it_wins`, CrossProcessTest after `proc.kill()`). |
+| holder_pid | `:65-71` separate `open(..., "rb")`, `seek(16)`, read 16 bytes, `int(strip)` | Never reads byte 0. Blank or short file gives `ValueError`, which returns None. Cross-process readability confirmed on Windows CI. |
+| Inheritance | `os.open` fds are non-inheritable by default (PEP 446, `O_NOINHERIT` on Windows). `spawn` passes `close_fds=True` (`:74`). `start` probes with `held()`, which closes its handle before `spawn` (`daemon.py:189,195`). | The child cannot inherit the lock handle. |
+
+### Stop-file protocol (focus 2)
+- Created only by `request_stop` (`host_windows.py:79`), which `daemon._terminate` calls only after `held()` is True (`daemon.py:181,192,201`). The path is fixed: `Path(d) / "poller.stop"` in the state dir passed to that host, and the content is ignored. A file can only affect the poller that owns the same state dir. Anyone who can write the state dir can stop that poller, which matches the owner trust boundary.
+- Cleared after lock + identity at startup (`daemon.py:104-105`) and on exit after `_cleanup` and before `release` (`:111-113`), matching the design data flow.
+- POSIX ignores a planted `poller.stop`: `PosixHost.stop_requested` is False (`host_posix.py:63-64`). Probe: candidate `is_stopping()` stays False with the file present.
+- Race (stop issued while a new poller starts): reproduced with a hybrid host (real flock + real `WindowsHost` stop-file methods). A `stop` that lands between lock acquisition and the startup `clear_stop` has its file erased. The poller keeps running and that `stop` returns `failed`. A follow-up `stop` works (`stopped`, no stop file left). See W1.
+
+### POSIX unchanged (focus 3)
+- `status` output is byte-identical on base and candidate (`'stopped'`, `'running pid=4242 last_tick=00:00:02Z panes=1'`), with a planted stop file on the candidate.
+- `_wait` with `stop_poll_s is None` performs a single `_stop.wait(seconds)` (`daemon.py:81-84`). `_loop` uses `is_stopping()`, which equals `_stop.is_set()` on POSIX. `clear_stop` is a no-op.
+- All 215 baseline ids are `ok`.
+
+### is_stopping latch and should_stop wiring (focus 4)
+- `daemon.py:75-78`: the first time the host reports a stop request, `is_stopping()` sets `_stop`. The latch survives the file being removed (`test_is_stopping_follows_the_host_and_latches`; mutant S2 killed). Setting `_stop` also wakes any in-progress `_stop.wait` slice.
+- `main.py:44` already sets `svc.should_stop = poller.is_stopping`, so `TickService` (`tick.py:42,53`) sees a stop-file request between sessions and actions without code change.
+
+### Spawn (focus 5)
+`host_windows.py:74-76`: argv `[sys.executable, "-X", "utf8", "-B", *argv_tail]`, `creationflags = CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` (0x200 | 0x08000000), no `DETACHED_PROCESS`, no `start_new_session`, `close_fds=True`, and DEVNULL stdio. All of these are asserted by `SpawnTest` (mutants W2, W3 and W4 killed).
+
+### Mutation testing (22 mutants, full suite, archive copy, kill guard on)
+| Mutant | Result | Killing test |
+|--------|--------|--------------|
+| D3 `_wait_free` loop uses `is_running` (carry-over) | **KILLED** | 3 `StopWaitTest` tests |
+| S1 `is_stopping` ignores the host | KILLED (suite crash/timeout) | stop-flow tests |
+| S2 no latch | KILLED | `test_is_stopping_follows_the_host_and_latches` |
+| S3 no startup `clear_stop` / S4 no exit `clear_stop` / S5 `clear_stop` before `record_identity` / S10 `clear_stop` after `release` | KILLED | `test_stale_stop_file_is_cleared_after_the_lock_and_again_on_exit` (+ `test_poller_run_uses_host_lock_and_identity` for S10) |
+| S6 status always `running` | KILLED | `test_stopping_when_held_and_stop_requested` |
+| S7 `_wait` ignores `stop_poll_s` | KILLED | `test_wait_wakes_in_slices_when_the_host_polls` |
+| S8 `_loop` checks only the event | KILLED | `test_stop_request_ends_the_loop_between_ticks` |
+| S9 default `self._sleep = sleep or self._stop.wait` | **SURVIVED** | see W2 |
+| S11 status probes a default PosixHost | KILLED | 3 tests |
+| W1 `request_stop` only with a verified pid | KILLED | `test_request_stop_creates_the_stop_file_ignoring_pid` |
+| W2 DETACHED_PROCESS / W3 drop `-X utf8` / W4 `close_fds=False` | KILLED | `test_spawn_flags_and_argv` |
+| W5 also register SIGTERM | **SURVIVED** | see S2 |
+| W6 `stop_poll_s=None` / W7 `supports_socket=True` | KILLED | `test_capabilities` |
+| W8 `clear_stop` without `missing_ok` | KILLED | `test_clear_stop_is_idempotent` |
+| T1 FakeHost stop-file frees immediately | KILLED | 3 `StopWaitTest` tests |
+| T2 `child_env` drops APPDATA | KILLED | `ChildEnvTest` |
+The msvcrt seek/unlock mutants cannot run on macOS. Their killing tests (`LockTest`, `CrossProcessTest`) ran and passed on Windows CI, and a wrong-range unlock raises there. This is static reasoning plus CI evidence, not a local mutation run.
+Process safety: `pgrep -fl main.py` before and after showed only the user's poller (59645). It was never signalled, and the guard log is empty.
+
+### Tests quality (focus 6)
+- Windows tests are meaningful. `CrossProcessTest` uses a real child Python process that holds the lock (`HOLDER` script), proves cross-process blocking and pid readability, crashes it with `proc.kill()`, and then proves the lock is freed and the stale pid is wiped. `LockTest` uses two real handles in the same process.
+- FakeHost stop-file mode is faithful enough. `request_stop` sets the flag only when a holder exists, while the real host touches the file unconditionally. The two are equivalent because the daemon calls `request_stop` only after `held()` is True. `free_after` models the poller exiting after N polls. The flag is not cleared when the holder frees, which is harmless because status checks `held()` first.
+- D3 carry-over is closed with `wait>0`, a fake clock, and frees after N polls.
+
+### Spec Compliance Matrix (change-wide; slice-2a-relevant rows)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Windows single-instance lock | Second instance | `CrossProcessTest`, `LockTest.test_second_lock_fails...`, `TestRun.test_second_run_exits_zero_without_ticking` (WindowsHost, Windows CI) | COMPLIANT |
+| Windows single-instance lock | Crashed holder | `CrossProcessTest` (killed holder frees lock, re-acquire works) | PARTIAL (`start` with WindowsHost untested; main selection is 2b) |
+| Windows spawn | Spawn flags | `SpawnTest.test_spawn_flags_and_argv` | PARTIAL (CLI `CREATE_NO_WINDOW` is 2.7) |
+| Windows liveness without signals | Liveness probe | `TestStatus` with WindowsHost on Windows CI | PARTIAL (no assertion that nothing is signalled; W3) |
+| Stop and status actions | Stopping status | `StatusStoppingTest` x3 (6 jobs) + `StopFileTest` (real file) | COMPLIANT |
+| Stop and status actions | Windows cooperative stop | `test_stop_request_ends_the_loop_between_ticks`, `StopWaitTest`, `TestRun` cleanup (event path) | PARTIAL (no real stop-file end-to-end with token clearing; hybrid probe confirms) |
+| Single detached poller | Windows concurrent starts | lock tests + `test_second_run...` on Windows | PARTIAL (`start` concurrency needs 2b selection) |
+| Previously compliant (Handoff re-run, Stale pidfile, Stop, Atomic x2, Matrix, AttributeError on POSIX) | 7 | unchanged, all pass | COMPLIANT |
+| Forced termination, Pid reuse guard, manifest, Windows/No-AF_UNIX selection, sidebar paths | 10 | slices 2b/4 | UNTESTED (out of slice) |
+**Compliance summary**: 9/26 scenarios compliant (7 before, plus Second instance and Stopping status). 1/11 requirements fully complete.
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|----------|-----------|-------|
+| `msvcrt.locking(fd, LK_NBLCK, 1)` on byte 0 after `lseek(0)`, pid at offset 16, release = wipe, `LK_UNLCK`, close | Yes | |
+| Liveness by lock probe only | Yes | No `os.kill` in `host_windows.py` |
+| Stop file, poll `stop_poll_s = 0.5` | Yes | |
+| Spawn flags and argv | Yes | |
+| `supports_socket = False` | Yes (property only; main wiring is 2b) | |
+| Startup `lock -> record_identity -> clear_stop`, exit `cleanup -> clear_stop -> release` | Yes | Design-inherent race, see W1 |
+| `is_stopping` sets `_stop`; POSIX single wait | Yes | |
+| Signal handlers INT and BREAK, no HUP | Yes | |
+| `force_terminate` | Stub `False` | Planned for 2b; a stuck Windows poller reports `failed` until then |
+
+### TDD Compliance (focus 7)
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Cycle Evidence table | Missing | apply-progress #178 has no table and no RED/GREEN record for 2a. RED and GREEN are combined in the same commits (10f7520, 7c20152). |
+| RED reproduced independently | Yes | `test_host_windows` against base src: ImportError. `test_stop_flow` at 7c20152 against 10f7520 src: 6/14 fail (4 FAIL, 2 ERROR). The other 8 characterize existing `_wait_free` behavior (the D3 carry-over) and pass by design. `test_support` against base `support.py`: fails. |
+| GREEN | Yes | 243/243 local (4 nt skips), 6/6 CI |
+| Safety net | Yes | 215 baseline ids unchanged |
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+- W1 A stop request that lands during poller startup is lost (`daemon.py:96-105`). `stop` touches `poller.stop` as soon as `held()` is True. A poller that has just taken the lock then runs `clear_stop` at `:105` and erases the request. Reproduced: the concurrent stop returned `failed`, the poller kept running, and a follow-up stop succeeded. The failure is visible, not silent: rc 1 and `handoff_failed` is logged (`main.py:89-91`). A `start` handoff in the same window returns `failed` and does not spawn. The window is microseconds (lock -> identity write -> clear), and the behavior matches the design data flow. Once 2b lands, guarded `force_terminate` will turn this into a forced stop. Fix option: note the time before `acquire_lock` and clear only a stop file whose mtime is older than that time. Do not clear before taking the lock: that would let a losing `run` delete the live poller's pending request.
+- W2 Mutant S9 survives. Nothing tests the default `self._sleep = sleep or self._wait` (`daemon.py:67`). Every test either injects `sleep=` or calls `_wait` directly. Production (`main.py:43`) relies on the default. Reverting it would delay noticing a Windows stop by up to one full interval (4 s) plus the tick, which is half of `WAIT_S`. Add a Poller test with no `sleep=` and a `stop_poll_s` host that asserts `run()` exits soon after the stop flag is set.
+- W3 Task 2.1 lists the RED item "liveness never `os.kill`", but no test asserts it: `test_host_windows.py` never patches `os.kill`. Static evidence: `host_windows.py` has no `os.kill`, and `status` calls only `held`/`stop_requested`. `daemon.start`/`stop` still default to `PosixHost(kill=os.kill)` when no host is passed (`daemon.py:187,200`). `main.py` passes no host until 2b, so add the assertion together with host selection in 2b.
+- W4 Strict TDD evidence format: the apply-progress has no TDD Cycle Evidence table (repeat of slice-1 W4). The strict module would rate this CRITICAL. It is kept as a WARNING, consistent with the slice-1 precedent, because RED and GREEN were reproduced independently above and every new behavior has a killing test except S9 and W5.
+
+**SUGGESTION**:
+- S1 `clear_stop` is unguarded. At `daemon.py:105` it runs before the `try`. At `:112` it runs inside `finally`, before `release`. On Windows, `unlink` can raise `PermissionError` if another handle has `poller.stop` open (for example an AV scanner or a concurrent `touch`). At startup this ends `run` with "state directory is not usable" (rc 1, `main.py:67-69`). In `finally` it skips `release` (the OS frees the lock on exit) and masks any loop exception. Wrap both calls with `_safely`.
+- S2 Mutant W5 (also registering SIGTERM) survives because the fake `signal` module in `SignalTest` has no `SIGTERM`. Add `SIGTERM`/`SIGHUP` to the fake spec and assert they are not registered.
+- S3 Between `_cleanup` (pidfile removed) and `release`, Windows `status` can print `stopping pid=None`. The POSIX analogue `running pid=None` already exists. Cosmetic.
+- S4 Stop-flow tests import `Base` from `test_daemon`, so a WindowsHost import problem breaks both modules at once. Acceptable, but a shared fixture module would isolate failures.
+- S5 PR #4 merged before verification completed. In later slices, gate the merge on the verify report.
+
+### Verdict
+The envelope says `fail` because change-wide evidence is incomplete: 1/11 requirements and 9/26 scenarios, with slices 2b, 4 and 5 pending. The change is not archive-ready. This does not indicate a slice-2a defect: 0 blockers, 0 CRITICAL.
+
+Slice 2a verdict: PASS WITH WARNINGS
+The msvcrt seek, lock and unlock order is correct and proven on real Windows CI by the cross-process and in-process lock tests. The stop-file protocol, the `is_stopping` latch and the stopping status match the design. POSIX output and the 215 baseline tests are unchanged. D3 is now killed. Open items: the startup stop race (W1, visible as `failed`), the untested default-sleep wiring (W2), the missing no-`os.kill` assertion (W3), and the TDD evidence format (W4).
