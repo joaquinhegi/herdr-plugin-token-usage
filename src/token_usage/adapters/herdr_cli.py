@@ -8,6 +8,7 @@ from typing import Any
 
 from token_usage.ports import HerdrError
 
+CREATE_NO_WINDOW = 0x08000000  # no console flash per CLI call on Windows
 _ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
 
 
@@ -33,18 +34,28 @@ def panes_from(data: Any) -> list[dict[str, Any]]:
     return [p for p in data if isinstance(p, dict)]
 
 
+def valid_bin(bin_path: str, os_name: str | None = None) -> bool:
+    """Absolute path to a real file. Windows: an .exe only (no cmd/bat shells); elsewhere: executable bit."""
+    if not os.path.isabs(bin_path) or not os.path.isfile(bin_path):
+        return False
+    if (os_name or os.name) == "nt":
+        return bin_path.lower().endswith(".exe")
+    return os.access(bin_path, os.X_OK)
+
+
 class HerdrCli:
-    def __init__(self, bin_path: str, timeout: float = 2.0):
-        if not os.path.isabs(bin_path) or not os.path.isfile(bin_path) or not os.access(bin_path, os.X_OK):
+    def __init__(self, bin_path: str, timeout: float = 2.0, os_name: str | None = None):
+        if not valid_bin(bin_path, os_name):
             raise HerdrError("invalid_bin")
         self._bin = bin_path
         self._timeout = timeout
+        self._extra = {"creationflags": CREATE_NO_WINDOW} if (os_name or os.name) == "nt" else {}
 
     def _run(self, *args: str) -> str:
         try:
             proc = subprocess.run(
                 [self._bin, *args], shell=False, capture_output=True, timeout=self._timeout,
-                check=False, stdin=subprocess.DEVNULL, text=True,
+                check=False, stdin=subprocess.DEVNULL, text=True, **self._extra,
             )
         except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
             raise HerdrError(type(exc).__name__) from None

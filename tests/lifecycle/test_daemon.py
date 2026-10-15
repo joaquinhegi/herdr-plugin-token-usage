@@ -60,7 +60,7 @@ class Base(unittest.TestCase):
         p = daemon.Poller(self.dir, "/sock/a", tick, self.herdr, self.store, self.clock, self.logger,
                           sleep=sleep, orphan_after=kw.get("orphan_after", 300),
                           lock_sleep=kw.get("lock_sleep", lambda s: None), mono=kw.get("mono", time.monotonic),
-                          host=kw.get("host") or self.host)
+                          host=kw.get("host") or self.host, **({"wall": kw["wall"]} if "wall" in kw else {}))
         box["p"] = p
         return p
 

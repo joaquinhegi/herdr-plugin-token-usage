@@ -2,8 +2,10 @@ import json
 import os
 import sys
 import shutil
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
@@ -23,13 +25,13 @@ class HerdrCliTest(unittest.TestCase):
         return json.loads((self.dir / "argv.json").read_text())
 
     def test_relative_bin_rejected(self):
-        make_fake_bin(self.dir)
+        name = make_fake_bin(self.dir).name
         old = os.getcwd()
         os.chdir(self.dir)
         self.addCleanup(os.chdir, old)
-        self.assertTrue(os.path.isfile("herdr") and os.access("herdr", os.X_OK))
+        self.assertTrue(os.path.isfile(name))
         with self.assertRaises(HerdrError):
-            HerdrCli("herdr")
+            HerdrCli(name)
 
     def test_default_timeout_is_2(self):
         self.assertEqual(HerdrCli(str(make_fake_bin(self.dir)))._timeout, 2)
@@ -110,6 +112,46 @@ class HerdrCliTest(unittest.TestCase):
             with self.assertRaises(HerdrError):
                 cli.report(pane, source, name, "v", 1, 1000)
         self.assertFalse((self.dir / "argv.json").exists())
+
+
+class WindowsBinTest(unittest.TestCase):
+    """os_name="nt" is injected, so the Windows rules are asserted on every OS."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir, True)
+
+    def bin(self, name, mode=0o755):
+        path = self.dir / name
+        path.write_text("x")
+        path.chmod(mode)
+        return str(path)
+
+    def test_only_exe_is_accepted_case_insensitively(self):
+        for name in ("herdr.exe", "HERDR.EXE", "herdr.Exe"):
+            self.assertIsInstance(HerdrCli(self.bin(name, 0o644), os_name="nt"), HerdrCli)  # no X_OK check on nt
+        for name in ("herdr.cmd", "herdr.bat", "herdr.ps1", "herdr", "herdr.exe.cmd"):
+            with self.assertRaises(HerdrError, msg=name):
+                HerdrCli(self.bin(name), os_name="nt")
+
+    @posix_only
+    def test_posix_still_requires_the_executable_bit(self):
+        with self.assertRaises(HerdrError):
+            HerdrCli(self.bin("herdr.exe", 0o644), os_name="posix")
+
+    def run_kwargs(self, os_name):
+        calls = []
+        with mock.patch.object(subprocess, "run", lambda argv, **kw: calls.append(kw) or mock.Mock(returncode=0, stdout="[]")):
+            HerdrCli(self.bin("herdr.exe"), os_name=os_name).list_panes()
+        return calls[0]
+
+    def test_windows_runs_with_create_no_window_and_no_shell(self):
+        kw = self.run_kwargs("nt")
+        self.assertEqual(kw["creationflags"], 0x08000000)
+        self.assertFalse(kw["shell"])
+
+    def test_posix_passes_no_creationflags(self):
+        self.assertNotIn("creationflags", self.run_kwargs("posix"))
 
 
 if __name__ == "__main__":

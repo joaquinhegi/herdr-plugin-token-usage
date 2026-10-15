@@ -5,23 +5,50 @@ id = "local.token-usage"
 name = "Token Usage"
 version = "0.1.0"
 min_herdr_version = "0.8.2"
-platforms = ["linux", "macos"]  # Windows is not supported yet (POSIX-only lock, signals and socket)
+platforms = ["linux", "macos", "windows"]  # items below are scoped per platform
 description = "Per-pane Claude token totals published as a $tokens sidebar token."
 
+
 [[startup]]
+platforms = ["linux", "macos"]
 command = ["python3", "-B", "src/main.py", "start"]
+
+[[startup]]
+platforms = ["windows"]
+command = ["py", "-3", "-X", "utf8", "-B", "src/main.py", "start"]
 
 [[actions]]
 id = "start"
 title = "Token Usage: start"
+platforms = ["linux", "macos"]
 command = ["python3", "-B", "src/main.py", "start"]
 
 [[actions]]
 id = "stop"
 title = "Token Usage: stop"
+platforms = ["linux", "macos"]
 command = ["python3", "-B", "src/main.py", "stop"]
 
 [[actions]]
 id = "status"
 title = "Token Usage: status"
+platforms = ["linux", "macos"]
 command = ["python3", "-B", "src/main.py", "status"]
+
+[[actions]]
+id = "start-windows"
+title = "Token Usage: start (Windows)"
+platforms = ["windows"]
+command = ["py", "-3", "-X", "utf8", "-B", "src/main.py", "start"]
+
+[[actions]]
+id = "stop-windows"
+title = "Token Usage: stop (Windows)"
+platforms = ["windows"]
+command = ["py", "-3", "-X", "utf8", "-B", "src/main.py", "stop"]
+
+[[actions]]
+id = "status-windows"
+title = "Token Usage: status (Windows)"
+platforms = ["windows"]
+command = ["py", "-3", "-X", "utf8", "-B", "src/main.py", "status"]

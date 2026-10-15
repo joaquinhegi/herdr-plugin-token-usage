@@ -12,6 +12,7 @@ from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from token_usage.adapters.herdr_cli import valid_bin  # noqa: E402
 from token_usage.lifecycle import daemon  # noqa: E402
 
 COMMANDS = ("run", "start", "stop", "status")
@@ -36,11 +37,13 @@ def _build_poller(state_dir: Path, bin_path: str, socket_path: str | None):
             return time.time()
 
     logger = tlog.make_logger(state_dir)
-    herdr = FallbackHerdr(HerdrSocket(socket_path) if socket_path else None, HerdrCli(bin_path), logger)
+    host = daemon.default_host()
+    socket = HerdrSocket(socket_path) if socket_path and host.supports_socket else None  # Windows: CLI only
+    herdr = FallbackHerdr(socket, HerdrCli(bin_path), logger)
     store, clock = StateStore(state_dir), Clock()
     locator = ClaudeLocator(Path.home() / ".claude" / "projects", logger)
     svc = TickService(herdr, locator, JsonlTail(), store, clock, logger)
-    poller = daemon.Poller(state_dir, socket_path or "", svc.tick, herdr, store, clock, logger)
+    poller = daemon.Poller(state_dir, socket_path or "", svc.tick, herdr, store, clock, logger, host=host)
     svc.should_stop = poller.is_stopping
     return poller
 
@@ -58,7 +61,7 @@ def main(argv: list[str]) -> int:
     if not state or (cmd in ("run", "start") and not bin_path):
         print("token-usage: HERDR_PLUGIN_STATE_DIR and HERDR_BIN_PATH must be set", file=sys.stderr)
         return 2
-    if cmd == "start" and not (os.path.isabs(bin_path) and os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)):
+    if cmd == "start" and not valid_bin(bin_path):
         print("token-usage: HERDR_BIN_PATH must be an absolute path to an executable", file=sys.stderr)
         return 2
     state_dir, socket_path = Path(state), _env("HERDR_SOCKET_PATH")

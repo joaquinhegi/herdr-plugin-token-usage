@@ -23,6 +23,7 @@ from token_usage.adapters.log import log_event, log_exception
 from token_usage.app.tick import SOURCE, TOKEN
 from token_usage.domain.reconcile import Clear, reconcile
 from token_usage.lifecycle.host_posix import LOCK as HOST_LOCK, PosixHost
+from token_usage.lifecycle.host_windows import WindowsHost
 
 LOCK = HOST_LOCK
 PID = "poller.pid"
@@ -32,10 +33,18 @@ PRUNE_S = 3600.0
 CLEANUP_S = 3.0   # total shutdown-cleanup budget
 LOCK_TRIES = 10   # run() lock attempts, 0.1 s apart (closes the probe-collision window)
 WAIT_S = 8.0      # handoff wait: CLEANUP_S + one worst-case herdr call (4 s) + margin
+FORCE_WAIT_S = 2.0  # wait after a guarded force-terminate before declaring failure
+
+
+def default_host(popen=subprocess.Popen, kill=os.kill, os_name=None):
+    """The one place the host adapter is chosen: Windows never receives os.kill."""
+    if (os_name or os.name) == "nt":
+        return WindowsHost(popen=popen)
+    return PosixHost(popen=popen, kill=kill)
 
 
 def is_running(state_dir: Path, host=None) -> bool:
-    return (host or PosixHost()).held(Path(state_dir))
+    return (host or default_host()).held(Path(state_dir))
 
 
 def read_pidfile(state_dir: Path) -> dict:
@@ -60,14 +69,14 @@ def _write_pidfile(state_dir: Path, info: dict) -> None:
 class Poller:
     def __init__(self, state_dir, socket_path, tick, herdr, store, clock, logger,
                  sleep=None, interval=INTERVAL_S, orphan_after=ORPHAN_S,
-                 lock_sleep=time.sleep, mono=time.monotonic, host=None):
+                 lock_sleep=time.sleep, mono=time.monotonic, host=None, wall=time.time):
         self.dir, self.socket_path = Path(state_dir), socket_path
         self.tick, self.herdr, self.store, self.clock, self.logger = tick, herdr, store, clock, logger
         self._stop = threading.Event()
         self._sleep = sleep or self._wait
         self.interval, self.orphan_after = interval, orphan_after
         self._lock_sleep, self._mono = lock_sleep, mono
-        self.host = host or PosixHost()
+        self.host, self._wall = host or default_host(), wall
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -93,6 +102,7 @@ class Poller:
         self.host.install_signal_handlers(self.request_stop)
 
     def run(self) -> int:
+        began = self._wall()  # a stop request newer than this belongs to this run (restart race)
         fd = self.host.acquire_lock(self.dir)
         for _ in range(LOCK_TRIES):
             if fd is not None:
@@ -102,14 +112,15 @@ class Poller:
         if fd is None:
             return 0  # another poller owns the lock
         self.host.record_identity(fd, os.getpid())
-        self.host.clear_stop(self.dir)  # a stop request left by a crashed run must not stop this one
-        info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
         try:
+            # a stop request left by a crashed run must not stop this one; a newer one must survive
+            self._safely("clear_stop_failed", lambda: self.host.clear_stop(self.dir, began))
+            info = {"pid": os.getpid(), "socket_path": self.socket_path, "started_at": self.clock.now()}
             _write_pidfile(self.dir, info)
             self._loop(info)
         finally:
             self._cleanup()
-            self.host.clear_stop(self.dir)
+            self._safely("clear_stop_failed", lambda: self.host.clear_stop(self.dir))
             self.host.release(fd)
         return 0
 
@@ -178,13 +189,18 @@ def _verified_pid(state_dir, host):
 
 
 def _terminate(state_dir, sleep, clock, wait, host) -> bool:
-    host.request_stop(state_dir, _verified_pid(state_dir, host))
-    return _wait_free(state_dir, sleep, clock, wait, host)
+    pid, started_at = _verified_pid(state_dir, host), read_pidfile(state_dir).get("started_at")
+    host.request_stop(state_dir, pid)
+    if _wait_free(state_dir, sleep, clock, wait, host):
+        return True
+    if pid is None or not host.force_terminate(state_dir, pid, started_at):
+        return False
+    return _wait_free(state_dir, sleep, clock, FORCE_WAIT_S, host)
 
 
 def start(state_dir, socket_path, main_path, popen=subprocess.Popen, kill=os.kill,
           sleep=time.sleep, clock=time.monotonic, wait=WAIT_S, host=None) -> str:
-    state_dir, host = Path(state_dir), host or PosixHost(popen=popen, kill=kill)
+    state_dir, host = Path(state_dir), host or default_host(popen, kill)
     result = "started"
     if host.held(state_dir):
         if read_pidfile(state_dir).get("socket_path") == socket_path:
@@ -197,14 +213,14 @@ def start(state_dir, socket_path, main_path, popen=subprocess.Popen, kill=os.kil
 
 
 def stop(state_dir, kill=os.kill, sleep=time.sleep, clock=time.monotonic, wait=WAIT_S, host=None) -> str:
-    state_dir, host = Path(state_dir), host or PosixHost(kill=kill)
+    state_dir, host = Path(state_dir), host or default_host(kill=kill)
     if not host.held(state_dir):
         return "stopped"
     return "stopped" if _terminate(state_dir, sleep, clock, wait, host) else "failed"
 
 
 def status(state_dir, store, host=None) -> str:
-    host = host or PosixHost()
+    host = host or default_host()
     if not host.held(Path(state_dir)):
         return "stopped"
     info = read_pidfile(state_dir)
