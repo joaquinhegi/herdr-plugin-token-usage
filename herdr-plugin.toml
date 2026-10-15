@@ -3,7 +3,7 @@
 # start command is idempotent and self-detaches the poller (see lifecycle/daemon.py).
 id = "local.token-usage"
 name = "Token Usage"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.8.2"
 platforms = ["linux", "macos", "windows"]  # items below are scoped per platform
 description = "Per-pane Claude token totals published as a $tokens sidebar token."
