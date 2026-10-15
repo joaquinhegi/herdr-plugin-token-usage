@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -57,8 +58,13 @@ class StopFileTest(Base):
         self.assertFalse(self.host.supports_socket)
         self.assertEqual(self.host.stop_poll_s, 0.5)
 
-    def test_force_terminate_is_deferred_to_the_guarded_implementation(self):
-        self.assertFalse(self.host.force_terminate(self.dir))
+    def test_clear_stop_older_than_keeps_a_newer_request(self):  # W1
+        self.host.request_stop(self.dir, None)
+        mtime = (self.dir / "poller.stop").stat().st_mtime
+        self.host.clear_stop(self.dir, older_than=mtime - 5)  # the request is newer than the stamp
+        self.assertTrue(self.host.stop_requested(self.dir))
+        self.host.clear_stop(self.dir, older_than=mtime + 5)  # stale: older than the stamp
+        self.assertFalse(self.host.stop_requested(self.dir))
 
 
 class SpawnTest(Base):
@@ -78,22 +84,22 @@ class SpawnTest(Base):
 class SignalTest(Base):
     def test_int_and_break_stop_and_hup_is_not_touched(self):
         stops, registered = [], {}
-        fake = mock.Mock(SIGINT=2, SIGBREAK=21, spec=["SIGINT", "SIGBREAK", "signal"])
+        fake = mock.Mock(SIGINT=2, SIGBREAK=21, SIGTERM=15, SIGHUP=1, spec=["SIGINT", "SIGBREAK", "SIGTERM", "SIGHUP", "signal"])
         fake.signal = lambda sig, fn: registered.__setitem__(sig, fn)
         with mock.patch.object(host_windows, "signal", fake):
             self.host.install_signal_handlers(lambda: stops.append(1))
-        self.assertEqual(sorted(registered), [2, 21])
+        self.assertEqual(sorted(registered), [2, 21])  # S2: neither SIGTERM (15) nor SIGHUP (1)
         for fn in registered.values():
             fn(0, None)
         self.assertEqual(len(stops), 2)
 
     def test_missing_sigbreak_is_skipped(self):
         registered = {}
-        fake = mock.Mock(SIGINT=2, spec=["SIGINT", "signal"])
+        fake = mock.Mock(SIGINT=2, SIGTERM=15, SIGHUP=1, spec=["SIGINT", "SIGTERM", "SIGHUP", "signal"])
         fake.signal = lambda sig, fn: registered.__setitem__(sig, fn)
         with mock.patch.object(host_windows, "signal", fake):
             self.host.install_signal_handlers(lambda: None)
-        self.assertEqual(sorted(registered), [2])
+        self.assertEqual(sorted(registered), [2])  # SIGTERM/SIGHUP present on the module but untouched
 
 
 @nt_only
@@ -143,6 +149,46 @@ class CrossProcessTest(Base):
         handle = self.host.acquire_lock(self.dir)
         self.assertIsNotNone(handle)
         self.host.release(handle)
+
+
+@nt_only
+class RealTerminateTest(Base):
+    """Real OpenProcess/GetProcessTimes/TerminateProcess against a child that holds the lock."""
+
+    def start_holder(self):
+        proc = subprocess.Popen([sys.executable, "-B", "-c", HOLDER, str(SRC), str(self.dir)],
+                                stdout=subprocess.PIPE, env=child_env(), text=True)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.kill)
+        self.assertEqual(proc.stdout.readline().strip(), "ready")
+        return proc, self.host.holder_pid(self.dir)
+
+    def test_matching_child_is_terminated_and_frees_the_lock(self):
+        proc, pid = self.start_holder()
+        self.assertTrue(self.host.force_terminate(self.dir, pid, time.time()))
+        proc.wait(timeout=10)
+        self.assertFalse(self.host.held(self.dir))
+
+    def test_started_at_mismatch_leaves_the_child_alive(self):
+        proc, pid = self.start_holder()
+        for started in (time.time() - 3600, time.time() + 3600):  # process "created after", and far outside 60 s
+            self.assertFalse(self.host.force_terminate(self.dir, pid, started))
+        self.assertIsNone(proc.poll())
+        self.assertTrue(self.host.held(self.dir))
+
+    def test_pid_that_is_not_the_lock_holder_is_refused(self):
+        proc, pid = self.start_holder()
+        self.assertFalse(self.host.force_terminate(self.dir, pid + 4, time.time()))
+        self.assertIsNone(proc.poll())
+
+    def test_liveness_and_stop_never_use_os_kill(self):
+        from token_usage.lifecycle import daemon
+        proc, _ = self.start_holder()
+        with mock.patch.object(os, "kill", side_effect=AssertionError("os.kill")):
+            self.assertTrue(daemon.is_running(self.dir))
+            self.assertEqual(daemon.stop(self.dir, sleep=lambda s: None, wait=0), "failed")  # no pidfile: no pid, no force
+        self.assertIsNone(proc.poll())
 
 
 if __name__ == "__main__":

@@ -63,11 +63,11 @@ class PosixHost:
     def stop_requested(self, d: Path) -> bool:
         return False
 
-    def clear_stop(self, d: Path) -> None:
+    def clear_stop(self, d: Path, older_than: float | None = None) -> None:
         pass
 
-    def force_terminate(self, d: Path) -> bool:
-        return False
+    def force_terminate(self, d: Path, pid, started_at) -> bool:
+        return False  # SIGTERM already sent by request_stop; no escalation on POSIX
 
     def install_signal_handlers(self, on_stop) -> None:
         signal.signal(signal.SIGTERM, lambda *_: on_stop())
