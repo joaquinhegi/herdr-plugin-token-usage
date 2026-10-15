@@ -26,7 +26,7 @@ def make_fake_bin(directory: Path, *, sleep: float = 0, code: int = 0, out: str 
         f"print({out!r} if {out!r} is not None else json.dumps({{'type': 'pane_list', 'panes': {fixture_panes()!r}}}))\n"
         f"sys.exit({code})\n"
     )
-    path = directory / "herdr"
+    path = directory / ("herdr.exe" if os.name == "nt" else "herdr")  # Windows requires .exe; these tests never run it
     path.write_text(body)
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
