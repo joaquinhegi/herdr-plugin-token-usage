@@ -1,6 +1,7 @@
 # Token Usage — Herdr plugin
 
 [![CI](https://github.com/joaquinhegi/herdr-plugin-token-usage/actions/workflows/ci.yml/badge.svg)](https://github.com/joaquinhegi/herdr-plugin-token-usage/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/joaquinhegi/herdr-plugin-token-usage)](https://github.com/joaquinhegi/herdr-plugin-token-usage/releases/latest)
 ![Python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20(experimental)-lightgrey)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-brightgreen)
@@ -35,13 +36,17 @@ total = input + output + cache_creation + cache_read
 
 ## Install
 
-From GitHub:
+From GitHub, latest release (recommended):
 
 ```sh
-herdr plugin install joaquinhegi/herdr-plugin-token-usage
+herdr plugin install joaquinhegi/herdr-plugin-token-usage --ref latest
 herdr plugin enable local.token-usage
 herdr plugin action invoke start --plugin local.token-usage
 ```
+
+`latest` always points at the newest [release](https://github.com/joaquinhegi/herdr-plugin-token-usage/releases). To pin an exact version, use its tag instead, for example `--ref v0.2.0`. Always pass `--ref` so you get a released version rather than development code.
+
+On Windows, use the `start-windows` action instead of `start` (see [Windows](#windows-experimental)).
 
 A GitHub install also configures the sidebar (see [Install-time sidebar setup](#install-time-sidebar-setup)). Then apply it live:
 
@@ -206,6 +211,7 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and residual ris
 
 ## Operations
 
+- **Update:** Herdr versions that include `herdr plugin update` refetch the ref recorded at install, so an install pinned to `latest` moves to the newest release. Otherwise, run the `stop` action and reinstall with `herdr plugin install joaquinhegi/herdr-plugin-token-usage --ref latest --yes`, then `start`.
 - **Logs:** `herdr plugin log list --plugin local.token-usage`, plus `<state dir>/token-usage.log`.
 - **Restart:** run the `stop` action, then `start` (`stop-windows`, then `start-windows` on Windows).
 - **Disable:** run the `stop` action (`stop-windows` on Windows) first, so the poller clears its tokens and exits. Then run `herdr plugin disable local.token-usage`.
@@ -235,6 +241,15 @@ openspec/      specs, designs and verification reports for each change
 ```
 
 Changes go through pull requests against `main`, and CI must pass. The maintainer reviews and merges them. Run the test suite before opening one.
+
+### Releasing
+
+Releases follow [semantic versioning](https://semver.org) and are cut manually:
+
+1. In a pull request, bump `version` in `herdr-plugin.toml` (for example `0.3.0`) and merge it.
+2. In GitHub, open **Actions → release → Run workflow** on `main` and enter the same version, without the `v`.
+
+The workflow checks that the version matches the manifest, that it runs from `main` and that the tag does not exist yet. It then runs the full test matrix, creates the `vX.Y.Z` tag, moves the `latest` tag to it and publishes a GitHub Release with generated notes.
 
 ## License
 
