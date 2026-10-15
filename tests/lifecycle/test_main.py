@@ -97,10 +97,11 @@ class TestHostSelection(unittest.TestCase):
         main, socket_cls = load_main(), mock.Mock()
         host = FakeHost()
         host.supports_socket = supports_socket
+        state = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, state, True)  # registered first, runs after the logger is closed
         with mock.patch.object(main.daemon, "default_host", return_value=host), \
                 mock.patch("token_usage.adapters.herdr_socket.HerdrSocket", socket_cls), \
-                mock.patch("token_usage.adapters.herdr_cli.HerdrCli"), \
-                tempfile.TemporaryDirectory() as state:
+                mock.patch("token_usage.adapters.herdr_cli.HerdrCli"):
             poller = main._build_poller(Path(state), "/bin/herdr", "/some/herdr.sock")
             self.addCleanup(tlog.close_logger, poller.logger)
         self.assertIs(poller.host, host)
