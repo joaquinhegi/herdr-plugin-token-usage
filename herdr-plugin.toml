@@ -9,6 +9,16 @@ platforms = ["linux", "macos", "windows"]  # items below are scoped per platform
 description = "Per-pane Claude token totals published as a $tokens sidebar token."
 
 
+# GitHub installs run [[build]] once: it configures the sidebar (backup first, never fails the install).
+# `plugin link` does not run it; see README.
+[[build]]
+platforms = ["linux", "macos"]
+command = ["python3", "-B", "src/main.py", "sidebar-patch", "--install"]
+
+[[build]]
+platforms = ["windows"]
+command = ["py", "-3", "-X", "utf8", "-B", "src/main.py", "sidebar-patch", "--install"]
+
 [[startup]]
 platforms = ["linux", "macos"]
 command = ["python3", "-B", "src/main.py", "start"]
