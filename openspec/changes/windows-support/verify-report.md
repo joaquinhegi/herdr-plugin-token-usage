@@ -452,3 +452,167 @@ The envelope says `fail` because change-wide evidence is incomplete: 1/11 requir
 
 Slice 2a verdict: PASS WITH WARNINGS
 The msvcrt seek, lock and unlock order is correct and proven on real Windows CI by the cross-process and in-process lock tests. The stop-file protocol, the `is_stopping` latch and the stopping status match the design. POSIX output and the 215 baseline tests are unchanged. D3 is now killed. Open items: the startup stop race (W1, visible as `failed`), the untested default-sleep wiring (W2), the missing no-`os.kill` assertion (W3), and the TDD evidence format (W4).
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:2e56b387a9b2a0c5e98f0dff71474aefee20d95bdc7b27c4dec1ab68a9aa318b
+verdict: fail
+blockers: 0
+critical_findings: 0
+requirements: 5/11
+scenarios: 15/26
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:c91268a077836bf31cf7356f3ab71f462ca6a4e211a8014fd9e5ad27b81d60e2
+build_command: python3 -B -c "import ast,pathlib; [ast.parse(p.read_text(), str(p)) for p in pathlib.Path('src').rglob('*.py')]; print('build ok')"
+build_exit_code: 0
+build_output_hash: sha256:5c3d57cf803c92ff537694cda191d9c10c44f33c39eaf5f45e91e34f6413e254
+```
+
+## Verification Report
+
+**Change**: windows-support, Slice 2b (guarded force_terminate, host selection, exe-only herdr bin, CREATE_NO_WINDOW, manifest Windows items, 2a carry-overs)
+**Candidate**: branch `win-2b-terminate-manifest` (PR #5, OPEN), HEAD `2cf9619`, tree `11556e83`; scope `git diff d09c10c win-2b-terminate-manifest` (ebd8e4c, 02ce75f, 66f4054, 2cf9619; 17 files, +560/-63 = 623 changed lines, overage accepted by the user).
+**Mode**: Strict TDD (runner: unittest)
+**Scope note**: Totals (11 requirements, 26 scenarios) are counted from the three delta specs and are change-wide. Slices 4 and 5 are pending, so the envelope verdict is `fail` (not archive-ready). This is not a slice-2b defect: 0 blockers, 0 CRITICAL. evidence_revision = sha256 of (tree, test output hash, build output hash).
+
+### Completeness (Slice 2b)
+| Metric | Value |
+|--------|-------|
+| Tasks total (2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.10a) | 7 |
+| Tasks complete | 7 |
+| Tasks incomplete | 0 |
+Slice 4 (4.1-4.3) and slice 5 (5.1-5.5, manual) are unchecked by design.
+
+### Build & Tests Execution
+All local runs used `git archive` copies under the session scratchpad (`w2b` = candidate, `b2b` = base `d09c10c`), `python3 -B` (Homebrew 3.14.8), and an `os.kill` guard in `sitecustomize`. The repository was not written. No real herdr, socket, `~/.claude/projects` or `~/.config/herdr` was touched (HOME redirected for main.py probes).
+
+**Build**: Passed (AST parse of `src/**/*.py`, exit 0).
+
+**Tests (macOS, local)**: `Ran 281 tests ... OK (skipped=8)`, exit 0. The 8 skips are the nt-only `LockTest` (3), `CrossProcessTest` (1) and `RealTerminateTest` (4). Base `d09c10c`: 243 run, OK (skipped=4).
+Per-test outcome diff (base vs candidate): every base test id is still `ok` except 3 ids intentionally replaced (`test_force_terminate_is_deferred_to_the_guarded_implementation`, `test_declares_only_posix_platforms`, `test_startup_and_actions_are_argv_lists`); their successors pass.
+
+**CI (GitHub Actions run 38689444566, head `2cf9619`)**: 6/6 jobs green.
+| Job | Result |
+|-----|--------|
+| ubuntu / macos x 3.11, 3.13 | `Ran 281 tests` OK (skipped=8) |
+| windows-latest 3.11 (job 116271698611), 3.13 (job 116271698404) | `Ran 281 tests` OK (skipped=36) |
+`RealTerminateTest` really ran on both Windows jobs: `test_matching_child_is_terminated_and_frees_the_lock`, `test_started_at_mismatch_leaves_the_child_alive`, `test_pid_that_is_not_the_lock_holder_is_refused`, `test_liveness_and_stop_never_use_os_kill` are all `... ok` (log lines 286-289 and 1291-1294). The 36 Windows skips break down as: HerdrCliTest 5, WindowsBinTest 1 (POSIX X_OK), FallbackTest 3, HerdrSocketTest 10, StateStoreTest 1, TestRealSpawn 1, TestRunHardening 1, TestStart 9, PosixHostTest 1, sidebar TestApply 1 + TestCli 1 (slice 4), TickTest 1, plus 1 session-mapping scenario = 36. The previous run 38689340353 (head `66f4054`) failed on both Windows jobs with `PermissionError [WinError 32]` on `token-usage.log` in `test_socket_client_is_built_only_when_the_host_supports_it`; 2cf9619 closes the test's logger before removing the dir (test-only fix).
+
+**Coverage**: Not available (`coverage` not installed).
+
+### Force-terminate guard (focus 1)
+`host_windows.py:130-147`, called only from `daemon._terminate` (`daemon.py:191-198`).
+| Step | Code | Result |
+|------|------|--------|
+| pid sanity | `:132-134` int, not bool, > 1, != own pid; `started_at` int/float, not bool | Runs first. It is cheap and side-effect free, so running it before `held()` is equivalent to the design order. |
+| held, then holder_pid == pid | `:135` | held() runs first, so a winning probe wipes a stale identity before holder_pid is read. |
+| pidfile match | `_verified_pid` (`daemon.py:184-188`): pidfile pid == holder_pid, > 1, != own pid; `_terminate` forces only if this was non-None (`:196`) | Correct. `started_at` comes from the pidfile (`:192`). |
+| OpenProcess | `:138` `PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE`; NULL returns False without close (`:139-140`) | Correct. |
+| Creation window | `:143` refuse if unknown, `created > started_at`, or `started_at - created > 60` | Correct, both bounds tested at the boundary (+0.001, -60, -60.001). |
+| Terminate same handle, close in finally | `:141-147` | Correct; `close` runs on every path after a successful open, including an exception. |
+| ctypes | `:36-40` `OpenProcess.restype = wintypes.HANDLE`, `HANDLE` argtypes for GetProcessTimes/TerminateProcess/CloseHandle | `wintypes.HANDLE is c_void_p` (verified locally, 8 bytes): no 64-bit truncation. A NULL return becomes `None`, and `or None` normalizes it (`:43`). |
+| FILETIME to epoch | `:49-50` `((high << 32) | low - 116444736000000000) / 1e7` | Delta verified independently (1601-01-01 to 1970-01-01 = 1.16444736e17 x 100 ns); round-trip probe exact. The real Windows test proves the value lands within 60 s of `time.time()`. |
+Pid-reuse argument: TerminateProcess can only hit the process whose pid is the current lock holder at check time. If that holder dies and the pid is recycled before OpenProcess, the new process was created after the poller exited, which was after `started_at`, so `created > started_at` refuses it. The handle then pins the object until TerminateProcess. No path terminates without the full identity.
+
+### POSIX unchanged (focus 2)
+Parity probe `parity2b.py` (real flock holders, injected popen/kill/clock) on base and candidate: byte-identical output for free, same-socket, stuck-other-socket and unverified-holder scenarios (start/stop/status results, every kill/sleep/popen call, files left), and for `main._build_poller` on POSIX (`PosixHost`, `HerdrSocket` built, `supports_socket` True). `PosixHost.clear_stop` ignores `older_than` and `force_terminate` returns False (`host_posix.py:66-70`), so `_terminate` returns False on the same path with the same sleeps. `valid_bin` keeps `isabs + isfile + X_OK` off nt (`herdr_cli.py:37-43`).
+
+### W1 stop-race fix (focus 3)
+`daemon.py:105,117` stamps `began = wall()` before `acquire_lock`; `host_windows.py:120-128` keeps a stop file with `st_mtime > began`. On POSIX the call is a no-op, so APFS/ext4 granularity is irrelevant. On Windows the race it targets lasts microseconds (lock, identity write, clear). NTFS stamps the file with the coarse system time (clock-tick resolution, about 15.6 ms by default). On Python 3.11/3.12 `time.time()` reads the same coarse clock, so a touch in that window usually gets `mtime == began` and `>` clears it. On 3.13+ `time.time()` is precise, so the touch's coarse `mtime` is usually below `began` and it is cleared as well. The fix therefore rarely saves the real race (W1). No regression: the outcome is the 2a behavior (`failed`, rc 1, `handoff_failed` logged, retry works). In that window the pidfile is absent or stale, so `_verified_pid` is None and no force step runs. Clock skew: a stale file can only be kept if the wall clock steps backward past it; the new poller then exits at once, and the result is visible (S6).
+
+### HerdrCli and manifest (focus 4, 5)
+- `valid_bin` (`herdr_cli.py:37-43`): nt requires `bin_path.lower().endswith(".exe")`; `.cmd`, `.bat`, `.ps1`, bare, `herdr.exe.cmd` rejected; `HERDR.EXE`/`herdr.Exe` accepted. `CREATE_NO_WINDOW` only when `os_name == "nt"` (`:51`); POSIX passes no `creationflags` (passing it there would raise ValueError).
+- Manifest (`herdr-plugin.toml`): top-level `["linux","macos","windows"]`; every startup/action item has `platforms` (POSIX `["linux","macos"]`, Windows `["windows"]`); ids `start, stop, status, start-windows, stop-windows, status-windows` are unique across platforms, as the Herdr rules in explore.md:17 require; all commands are argv lists. Windows argv `py -3 -X utf8 -B src/main.py <cmd>`: the py launcher consumes `-3` and passes `-X utf8 -B` to python.exe. Regarding the 9009 report: Windows has App Execution Aliases for `python.exe`/`python3.exe` only, not `py.exe`. Without a launcher, Herdr gets a not-found spawn error instead of the Store stub (or 9009 if Herdr goes through cmd). A Store-only Python install has no `py.exe` (S4).
+
+### Mutation testing (42 mutants, full suite, archive copy)
+| Mutant | Result | Killing test |
+|--------|--------|--------------|
+| F1 no held() / F2 no holder match / F7 own pid / F8 `pid < 1` / F10 started_at unchecked | KILLED | `test_refused_before_any_handle_is_opened` |
+| F3, F3b (`>=`), F4, F4b (`>=`) creation window | KILLED | `test_creation_time_guard_is_bounded_on_both_sides` |
+| F5 terminate via a fresh handle | KILLED | `test_matching_identity_terminates_the_same_handle_then_closes_it` |
+| F6 close only on success | KILLED | 3 GuardTest tests |
+| F12 access without QUERY_LIMITED | KILLED | 3 GuardTest tests |
+| D1 force without verified pid / D2 force waits `wait` / D3 no wait after force / D4 started_at dropped | KILLED | ForceTerminateFlowTest |
+| D5 unconditional startup clear / D6 stamp after lock / D7, D8 unguarded clear | KILLED | PollerStopFileTest W1/S1 tests |
+| D10 nt -> PosixHost / D11, D12 defaults bypass selection | KILLED | TestHostSelection |
+| WC2 clear_stop ignores older_than | KILLED | `test_clear_stop_older_than_keeps_a_newer_request` |
+| H1 case-sensitive / H2 accepts .cmd / H3 flags on POSIX / H4 flags dropped / H5 nt needs X_OK | KILLED | WindowsBinTest (+ HerdrCliTest for H3) |
+| M1 socket regardless of host | KILLED | `test_socket_client_is_built_only_when_the_host_supports_it` |
+| T1-T4 manifest (python3 on Windows, unscoped POSIX item, dropped `-X utf8`, duplicate id) | KILLED | TestManifest |
+| F2b holder_pid before held / F9 bool pid allowed / F11 None creation as 0 / WC3 OSError unlinks / M2 Poller host not passed | SURVIVED | Equivalent: both conditions are still required; `True <= 1`; `started_at - 0 > 60`; unlink of a missing file is a no-op; the default host is the same selection |
+| WC1 `>` to `>=` | **SURVIVED** | boundary untested; see W1 |
+| D9 exit clear made conditional | **SURVIVED** | low impact; see S2 |
+| M3 main keeps the old X_OK check | SURVIVED locally | killed only on Windows CI by the unskipped `test_start_rejects_bad_bin_path` (static reasoning) |
+Process safety: the first guard blocked `pid < 20000`. The macOS pid counter wrapped during the run, so the guard blocked the tests' own `sleep 30` children (SIGKILL) and caused 30 s timeouts in `test_unverified_pid_is_never_signaled` from D10 on. Those mutants were rerun with a descendant-only guard (blocks pid <= 1, the user's poller 59645, and any non-descendant), and the results above are from the rerun. The user's poller (59645) was never signalled; neither guard log names it.
+
+### Spec Compliance Matrix (change-wide)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Platform adapter selection | Windows selection | `test_default_host_follows_the_os_name`; Windows CI `test_main` subprocess runs (a PosixHost on nt would raise ModuleNotFoundError for fcntl) | COMPLIANT |
+| Platform adapter selection | POSIX selection | parity probe identical; 240 base ids ok; TestHostSelection | COMPLIANT |
+| Windows single-instance lock | Second instance | LockTest, CrossProcessTest (Windows CI) | COMPLIANT |
+| Windows single-instance lock | Crashed holder | CrossProcessTest; RealTerminateTest frees the lock | PARTIAL (no `start` with a real WindowsHost after a crash) |
+| Windows spawn | Spawn flags | `SpawnTest.test_spawn_flags_and_argv`; `test_windows_runs_with_create_no_window_and_no_shell` | COMPLIANT |
+| Windows liveness without signals | Liveness probe | `RealTerminateTest.test_liveness_and_stop_never_use_os_kill` (Windows CI) | COMPLIANT |
+| Launcher and manifest | Manifest | TestManifest (5 tests) | COMPLIANT |
+| CLI-only Herdr transport | No AF_UNIX | `test_socket_client_is_built_only_when_the_host_supports_it` (all OS); `test_no_socket_uses_cli...` (POSIX only) | PARTIAL (W2) |
+| CLI-only Herdr transport | AttributeError on POSIX | `test_attribute_error_from_missing_transport_falls_back_to_cli` | COMPLIANT |
+| Atomic state replace retry | Transient sharing violation / Persistent failure | test_state_store, test_host_port, test_atomic | COMPLIANT (2) |
+| CI and documentation status | Matrix | run 38689444566, 6 jobs | COMPLIANT (docs half is slice 4) |
+| Single detached poller | Handoff re-run / Stale pidfile | TestStart, TestRun (POSIX) | COMPLIANT (2) |
+| Single detached poller | No connectivity (C13) | baseline behavior, not re-audited | PARTIAL |
+| Single detached poller | Windows concurrent starts | lock tests + `test_second_run_exits_zero_without_ticking` on Windows | PARTIAL (no concurrent `start` on Windows) |
+| Stop and status actions | Stop | TestRun, TestRealSpawn (POSIX) | COMPLIANT |
+| Stop and status actions | Windows cooperative stop | stop-file unit tests, StopWaitTest | PARTIAL (no real end-to-end) |
+| Stop and status actions | Stopping status | StatusStoppingTest | COMPLIANT |
+| Stop and status actions | Forced termination | ForceTerminateFlowTest (6), GuardTest, `RealTerminateTest.test_matching_child...` (Windows CI) | COMPLIANT |
+| Stop and status actions | Pid reuse guard | GuardTest refusals, `test_no_force_without_a_verified_pid`, `RealTerminateTest.test_pid_that_is_not_the_lock_holder_is_refused` | PARTIAL ("stale request is cleared" relies on the next poller's startup clear; not asserted in this flow) |
+| Approval-gated config patch | 5 scenarios | slice 4 | UNTESTED (out of slice) |
+**Compliance summary**: 15/26 scenarios compliant (9 before), 6 PARTIAL, 5 pending slice 4. 5/11 requirements fully complete (Platform adapter selection, Windows spawn, Windows liveness, Launcher and manifest, Atomic retry).
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|----------|-----------|-------|
+| Guarded TerminateProcess via ctypes, same handle, 60 s window | Yes | Sanity checks run before held(); equivalent |
+| Stop: wait 8 s, then force, then wait 2 s | Yes | 2 s wait only when force returned True (documented deviation, sensible) |
+| `main.py` selects host; no HerdrSocket when `not supports_socket` | Yes | Selection centralized in `daemon.default_host` |
+| HerdrCli `.exe` only on Windows, `CREATE_NO_WINDOW` | Yes | "test `launcher` prefix" from design File Changes not implemented; shebang tests stay skipped on Windows (tasks 2.10a) |
+| Manifest items per platform | Yes | |
+| Interface text (`clear_stop(d)`, `force_terminate(d)`) | No (text stale) | ports.py now has `older_than` and `(pid, started_at)`; see S5 |
+
+### TDD Compliance
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Cycle Evidence table | Missing | apply-progress #178 reports RED/GREEN in prose (counts, triangulation), not as the table (W3) |
+| RED reproduced independently | Yes | Candidate tests on base src: test_terminate_guard 23 errors; test_stop_flow 4 failures + 4 errors; test_herdr_cli 4 errors; test_main 3 errors; test_manifest 1 failure + 3 errors; test_host_windows 1 error |
+| GREEN | Yes | 281/281 local (8 nt skips), 6/6 CI |
+| Triangulation | Yes | 10 pre-handle refusals, 7 creation-time boundaries, open/terminate/probe failures, real child on Windows |
+| Safety net | Yes | 240 base ids unchanged, 3 intentionally replaced |
+
+### Test Layer Distribution
+Unit: test_terminate_guard (8), test_herdr_cli WindowsBinTest (4), test_stop_flow additions (11), test_manifest (5), TestHostSelection (3). Integration (real processes, Windows CI only): RealTerminateTest (4). E2E: none (manual slice 5).
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+- W1 The 2a-W1 fix rarely covers the real race on Windows (`daemon.py:105,117`, `host_windows.py:120-128`). NTFS timestamps have clock-tick resolution (about 15.6 ms). The race window (lock, identity write, clear) is microseconds after `began`. On Python 3.11/3.12 a racing touch usually gets `mtime == began` and is cleared by the strict `>`. On 3.13+ (precise `time.time()`) the coarse mtime is usually below `began`, so it is cleared too. The unit tests use plus or minus 5 s (`test_host_windows.py:61-67`), and mutant WC1 (`>=`) survives. This is analysis, not reproduced on Windows. No regression: the outcome stays the visible 2a behavior (`failed`, rc 1, retry works). Fix options: compare with `>=` against `began - margin` (for example one tick, 0.05 s), or write the holder pid into the stop file and clear at startup only a file that does not name this pid.
+- W2 The CLI is the only Windows transport, yet no test executes `HerdrCli._run` against a real process on Windows. HerdrCliTest (5) and FallbackTest (3) stay skipped there (shebang fake bin), and WindowsBinTest mocks `subprocess.run`. Argv quoting through `list2cmdline`, `CREATE_NO_WINDOW` with `capture_output`, and the "No AF_UNIX" listing path therefore depend on manual check 5.1. A fake `herdr.exe` (for example a copy of a tiny compiled stub, or `sys.executable` driven through a test-only launcher, as design.md planned) would close this.
+- W3 Strict TDD evidence format: there is still no TDD Cycle Evidence table (repeat of slice-1/2a W4). The strict module rates this CRITICAL. It is kept as a WARNING, consistent with precedent, because RED was reproduced independently for every new test module and every non-equivalent mutant is killed except WC1 and D9.
+
+**SUGGESTION**:
+- S1 Refused-force false negative (`daemon.py:194-197`). If the poller exits between the last `_wait_free` poll and `force_terminate`'s `held()`, the guard correctly refuses, but `stop` reports `failed` for a stopped poller. Returning `not host.held(state_dir)` when force is refused would fix it.
+- S2 Mutant D9 survives. Nothing asserts that the exit-time `clear_stop` is unconditional (`daemon.py:123`). Impact is low, because the next startup clears an older file.
+- S3 `_terminate` reads the pidfile twice (`daemon.py:184-185` and `:192`). The guard stays safe (a mismatched pair can only refuse), but one read would keep pid and started_at consistent.
+- S4 `py` prerequisite (slice 4, task 4.3): a Store-only Python has no `py.exe`; `py -3` may select a 3.10 (main.py then exits cleanly with rc 2). Document both and the missing-launcher symptom.
+- S5 Update design.md "Interfaces / Contracts" (`clear_stop(d, older_than)`, `force_terminate(d, pid, started_at)`) and the tasks forecast (~190 estimated vs 623 actual).
+- S6 A backward wall-clock step can make a stale stop file look newer than `began`, so a fresh poller exits immediately (visible as `stopped`). Rare; the W1 pid-in-file option also removes this.
+- S7 `force_terminate` propagates exceptions from the Win32 layer (asserted by `test_handle_is_closed_even_if_the_probe_raises`). In `stop`, an OSError would surface as "state directory is not usable" and anything else as a traceback. Consider mapping it to a refusal in `_terminate`.
+- S8 Kill-guard note for future verifies: use a descendant-only guard, not a pid threshold (pid wraparound).
+
+### Verdict
+The envelope says `fail` because change-wide evidence is incomplete: 5/11 requirements and 15/26 scenarios, with slices 4 and 5 pending. Not archive-ready; 0 blockers, 0 CRITICAL.
+
+Slice 2b verdict: PASS WITH WARNINGS
+The terminate guard is correct and complete: identity, held lock, pidfile, creation window, same handle, close in finally, and 64-bit-safe ctypes. It is proven on real Windows CI. Locally, 34 of 37 non-equivalent mutants are killed (WC1 and D9 survive; M3 is killed only on Windows CI); 5 more are equivalent. POSIX behavior is byte-identical to base. Host selection, the `.exe` rule, `CREATE_NO_WINDOW` and the manifest are correct and tested. Open items: W1 (the mtime-based race fix is mostly ineffective at NTFS granularity), W2 (no real Windows CLI execution test) and W3 (TDD table).
