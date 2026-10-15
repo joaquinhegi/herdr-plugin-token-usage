@@ -43,6 +43,12 @@ herdr plugin enable local.token-usage
 herdr plugin action invoke start --plugin local.token-usage
 ```
 
+A GitHub install also configures the sidebar (see [Install-time sidebar setup](#install-time-sidebar-setup)). Then apply it live:
+
+```sh
+herdr server reload-config
+```
+
 From a local clone:
 
 ```sh
@@ -51,6 +57,8 @@ herdr plugin link /path/to/herdr-plugin-token-usage
 herdr plugin enable local.token-usage
 herdr plugin action invoke start --plugin local.token-usage
 ```
+
+`plugin link` does not run the install build step, so configure the sidebar yourself once: `python3 -B src/main.py sidebar-patch --install` (Windows: `py -3 -B src/main.py sidebar-patch --install`), then `herdr server reload-config`.
 
 Herdr runs the plugin's startup hook only when it restores a session, so start the poller once after enabling. From then on it starts automatically. No Herdr restart is needed.
 
@@ -80,6 +88,52 @@ Windows support is implemented and tested in CI, but has not been validated on a
 - **Transport.** The plugin talks to Herdr through the CLI only; it does not use the Unix socket on Windows.
 - **Stopping.** `stop-windows` asks the poller to exit through a stop file. If the poller does not exit within the wait budget, a guarded force-terminate runs (see [`docs/SECURITY.md`](docs/SECURITY.md)).
 
+## Install-time sidebar setup
+
+On a GitHub install Herdr runs `sidebar-patch --install` once, after you confirm the install prompt. It uses the same config path as the other modes and never fails the install:
+
+| Your config | What happens |
+|---|---|
+| Missing | Created with `[ui.sidebar.agents]` and Herdr's default rows plus a styled `$tokens` |
+| Has no `[ui.sidebar.agents]` | Backed up, then the section is appended at the end; everything else is untouched |
+| Has rows without `$tokens` | Backed up, then a styled `$tokens` is added to the last row (and to `rows_by_agent.claude`) |
+| Already has `$tokens` (plain or styled) | Nothing changes |
+| Unparseable, unreadable or unsafe to edit | Nothing is written; manual steps are printed |
+
+Backups are `config.toml.bak-<timestamp>` next to the config. Run `herdr server reload-config` afterwards to apply the change live.
+
+## Customize the look
+
+The install writes `$tokens` as an inline table:
+
+```toml
+{ token = "$tokens", fg = "#f9e2af", bold = true }
+```
+
+| Field | Meaning |
+|---|---|
+| `fg` | Text color, hex `#RGB` or `#RRGGBB` |
+| `bold` | `true` or `false` |
+| `dim` | `true` to fade the text |
+
+Colors: yellow `#f9e2af`, peach `#fab387`, green `#a6e3a1`, sky `#89dceb`. A dimmed variant: `{ token = "$tokens", fg = "#89dceb", dim = true }`. The plain string `"$tokens"` still works and uses the default style.
+
+Move `$tokens` to another position by editing the rows. A row of its own:
+
+```toml
+[ui.sidebar.agents]
+rows = [["state_icon", "workspace", "tab"], ["agent"], [{ token = "$tokens", fg = "#a6e3a1" }]]
+```
+
+Per-agent rows go under `rows_by_agent.claude`, and apply to Claude panes only:
+
+```toml
+[ui.sidebar.agents.rows_by_agent]
+claude = [["state_icon", "workspace"], ["agent", { token = "$tokens", fg = "#fab387" }]]
+```
+
+For theme colors, see the `[theme]` section of `herdr --default-config`. To undo, restore the `.bak-*` backup or delete the `[ui.sidebar.agents]` section, then run `herdr server reload-config`.
+
 ## Show it in the sidebar
 
 Herdr displays `$tokens` only when a sidebar row includes it. Herdr's default sidebar rows ship commented out in `herdr --default-config`, so most configs need this once. Add it to your Herdr config (`~/.config/herdr/config.toml`, `%APPDATA%\herdr\config.toml` on Windows, or `$HERDR_CONFIG_PATH`):
@@ -101,9 +155,10 @@ The plugin also ships a helper that edits an existing rows section for you. It p
 ```sh
 python3 src/main.py sidebar-patch --print [--config PATH]   # preview, writes nothing
 python3 src/main.py sidebar-patch --apply [--config PATH]   # backup config.toml.bak-<timestamp>, then atomic replace
+python3 src/main.py sidebar-patch --install [--config PATH] # what the GitHub install runs; may create the config
 ```
 
-It never creates a rows section, since that would replace Herdr's default layout. It is idempotent, keeps comments and symlinks, and never runs at startup.
+`--print` and `--apply` never create a rows section, since that would replace Herdr's default layout; only `--install` does. It is idempotent, keeps comments and symlinks, and never runs at startup.
 
 ## How it works
 
@@ -128,9 +183,9 @@ every 4 s:  herdr pane list ──► pane → Claude session id (agent_session,
 | Unit | 50 | Token accounting, dedupe ledger, formatting, session mapping, reconcile rules, parsers |
 | Adapters | 79 | Transcript tailer, state store, Claude locator, Herdr CLI and socket clients, logging privacy |
 | Scenarios | 24 | Full poll ticks with fakes: two sessions, resume after restart, corrupt transcripts, Herdr down |
-| Lifecycle | 136 | Daemon lock and handoff, host adapters, stop flow, terminate guard, entrypoint errors, manifest, sidebar patch |
+| Lifecycle | 152 | Daemon lock and handoff, host adapters, stop flow, terminate guard, entrypoint errors, manifest, sidebar patch |
 | Support | 3 | Shared test helpers |
-| **Total** | **292** | |
+| **Total** | **308** | |
 
 - **CI:** GitHub Actions on Ubuntu, macOS and Windows with Python 3.11 and 3.13. On Windows, 35 POSIX-specific tests are skipped with a reason, for example flock, Unix sockets and file modes; on macOS and Linux, 8 Windows-only tests are skipped.
 - **Method:** built test-first. Each slice was verified independently against the spec, including deliberate mutations to confirm the tests catch regressions.

@@ -2,7 +2,7 @@
 
 - Local-first: no network, no telemetry, stdlib only.
 - Inputs are read-only: `~/.claude/projects/*/<uuid>.jsonl` (+ `subagents/`), after UUID validation and `realpath` containment.
-- Writes: the plugin state dir and Herdr pane metadata only. The sidebar patch writes the Herdr config only on explicit `--apply`, after a backup, and only edits an existing config (it never creates one).
+- Writes: the plugin state dir and Herdr pane metadata only. The sidebar patch writes the Herdr config only on explicit `--apply`, or `--install` during a GitHub install (the user confirms the install prompt and Herdr shows the build commands). It always backs up an existing file first, never runs at startup, verifies the result with `tomllib`, and `--install` never fails the install (every config problem prints manual steps and exits 0). Only `--install` can create a missing config.
 - Subprocesses: argv lists only (`HERDR_BIN_PATH` absolute and executable, `sys.executable`); no shell.
 - Logs hold event names, counts, exception types, pane ids and 8-char session prefixes; never transcript content, exception messages or paths.
 
