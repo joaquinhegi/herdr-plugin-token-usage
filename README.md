@@ -76,7 +76,7 @@ Windows support is implemented and tested in CI, but has not been validated on a
   ```
 
 - **Herdr binary.** `HERDR_BIN_PATH` must be an absolute path to `herdr.exe`. Other file types are rejected.
-- **Herdr config.** The default config path used by `sidebar-patch` is `%APPDATA%\herdr\config.toml` (still overridable with `$HERDR_CONFIG_PATH` or `$XDG_CONFIG_HOME`).
+- **Herdr config.** The default config path used by `sidebar-patch` is `%APPDATA%\herdr\config.toml` (overridable with `$HERDR_CONFIG_PATH`). On macOS and Linux the default is `$XDG_CONFIG_HOME/herdr/config.toml` when set, else `~/.config/herdr/config.toml`, after `$HERDR_CONFIG_PATH` (same as Herdr).
 - **Transport.** The plugin talks to Herdr through the CLI only; it does not use the Unix socket on Windows.
 - **Stopping.** `stop-windows` asks the poller to exit through a stop file. If the poller does not exit within the wait budget, a guarded force-terminate runs (see [`docs/SECURITY.md`](docs/SECURITY.md)).
 
@@ -152,16 +152,16 @@ See [`docs/SECURITY.md`](docs/SECURITY.md) for the threat model and residual ris
 ## Operations
 
 - **Logs:** `herdr plugin log list --plugin local.token-usage`, plus `<state dir>/token-usage.log`.
-- **Restart:** run the `stop` action, then `start`.
-- **Disable:** run the `stop` action first, so the poller clears its tokens and exits. Then run `herdr plugin disable local.token-usage`.
-- **Uninstall:** run the `stop` action, then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Remove the plugin state directory if it is left behind.
-- **Shell fallback for stop:** `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop` (on Windows, `py -3 -X utf8 -B src/main.py stop`).
+- **Restart:** run the `stop` action, then `start` (`stop-windows`, then `start-windows` on Windows).
+- **Disable:** run the `stop` action (`stop-windows` on Windows) first, so the poller clears its tokens and exits. Then run `herdr plugin disable local.token-usage`.
+- **Uninstall:** run the `stop` action (`stop-windows` on Windows), then `herdr plugin unlink local.token-usage` (linked) or `herdr plugin uninstall local.token-usage`. Remove the plugin state directory if it is left behind.
+- **Shell fallback for stop:** `HERDR_PLUGIN_STATE_DIR=<state dir> python3 -B src/main.py stop` (on Windows, in PowerShell: `$env:HERDR_PLUGIN_STATE_DIR="<state dir>"; py -3 -B src/main.py stop`).
 - **Revert the sidebar change:** remove the `"$tokens"` entries, or restore the `.bak-*` backup next to the config.
 
 ## Known limitations
 
 - **Claude Code only.** Codex sessions are not tracked yet.
-- **Detached poller.** The plugin keeps a detached background poller (on Windows, a hidden detached process). Herdr's plugin docs ask plugins to stop detached processes before their parent command exits. Herdr 0.8.2 does not enforce this; if a future version does, the poller would need a redesign.
+- **Detached poller.** The plugin keeps a detached background poller (on Windows, a background process started with `CREATE_NO_WINDOW`). Herdr's plugin docs ask plugins to stop detached processes before their parent command exits. Herdr 0.8.2 does not enforce this; if a future version does, the poller would need a redesign.
 - **Windows is experimental.** It has not been validated on a real Windows machine with a live Herdr; see [Windows](#windows-experimental).
 - **`CLAUDE_CONFIG_DIR` is not supported (all platforms).** Transcripts are read only from `~/.claude/projects`; a relocated Claude config directory is not followed.
 - **Forced stops leave stale values.** After a forced stop, the sidebar values disappear when their 60 s TTL expires.

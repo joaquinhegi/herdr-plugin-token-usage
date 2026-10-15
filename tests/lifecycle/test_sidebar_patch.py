@@ -263,9 +263,19 @@ class TestApplyReplace(Base):
 
 class TestCli(Base):
     def run_cli(self, *args):
-        env = child_env(HOME=str(self.dir))
+        env = self.cli_env()
         return subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", *args], env=env,
                               capture_output=True, text=True, timeout=20)
+
+    def cli_env(self, **extra):
+        """Every config-root variable points inside the temp dir: no real config on any OS."""
+        return child_env(HOME=str(self.dir), APPDATA=str(self.dir / "appdata"),
+                         XDG_CONFIG_HOME=str(self.dir / "xdg"), **extra)
+
+    def test_cli_env_is_isolated_from_real_config_roots(self):
+        env = self.cli_env()
+        for name in ("HOME", "USERPROFILE", "APPDATA", "XDG_CONFIG_HOME"):
+            self.assertTrue(Path(env[name]).is_relative_to(self.dir), name)
 
     def test_print_and_apply_via_main(self):
         self.write(ROWS_ONLY)
@@ -292,7 +302,7 @@ class TestCli(Base):
 
     def test_default_config_honors_herdr_config_path(self):
         self.write(ROWS_ONLY)
-        env = child_env(HOME=str(self.dir / "nohome"), HERDR_CONFIG_PATH=str(self.cfg))
+        env = self.cli_env(HERDR_CONFIG_PATH=str(self.cfg))
         r = subprocess.run([sys.executable, "-B", str(MAIN), "sidebar-patch", "--print"], env=env,
                            capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0)
