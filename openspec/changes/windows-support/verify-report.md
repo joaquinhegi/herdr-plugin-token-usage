@@ -616,3 +616,179 @@ The envelope says `fail` because change-wide evidence is incomplete: 5/11 requir
 
 Slice 2b verdict: PASS WITH WARNINGS
 The terminate guard is correct and complete: identity, held lock, pidfile, creation window, same handle, close in finally, and 64-bit-safe ctypes. It is proven on real Windows CI. Locally, 34 of 37 non-equivalent mutants are killed (WC1 and D9 survive; M3 is killed only on Windows CI); 5 more are equivalent. POSIX behavior is byte-identical to base. Host selection, the `.exe` rule, `CREATE_NO_WINDOW` and the manifest are correct and tested. Open items: W1 (the mtime-based race fix is mostly ineffective at NTFS granularity), W2 (no real Windows CLI execution test) and W3 (TDD table).
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:1f5ab17a86e8b9c2c347bf12b525bd9ff32a022d2a5dcf641089f8ffd5d5e842
+verdict: fail
+blockers: 0
+critical_findings: 0
+requirements: 7/11
+scenarios: 20/26
+test_command: python3 -B -m unittest discover
+test_exit_code: 0
+test_output_hash: sha256:5e6037f7363ff6e21a716d1d2deee63ce72f8a6d46e4df2240b387f921b8b562
+build_command: python3 -B -c "import ast,pathlib; [ast.parse(p.read_text(), str(p)) for p in pathlib.Path('src').rglob('*.py')]; print('build ok')"
+build_exit_code: 0
+build_output_hash: sha256:5c3d57cf803c92ff537694cda191d9c10c44f33c39eaf5f45e91e34f6413e254
+```
+
+## Verification Report
+
+**Change**: windows-support, Slice 4 (config path, stop-file identity, S1/S5/S7 carry-overs, docs). This is the last code slice, so this report also includes a change-wide pass.
+**Candidate**: branch `win-4-config-docs` (PR #6, OPEN), HEAD `7901b36`, tree `1e789730`; scope `git diff origin/main win-4-config-docs` (99b246f, 1b2a65f, 7901b36; 16 files, +245/-90).
+**Mode**: Strict TDD (runner: unittest)
+**Scope note**: The totals (11 requirements, 26 scenarios) are counted from the three delta specs and cover the whole change. Slice 5 (manual Windows validation, tasks 5.1-5.5) is still pending, so the envelope verdict is `fail`: the change is not archive-ready. This is not a slice-4 defect (0 blockers, 0 CRITICAL). evidence_revision = sha256 of (tree, test output hash, build output hash).
+
+### Completeness
+| Metric | Value |
+|--------|-------|
+| Tasks total (change) | 30 (25 code/doc + 5 manual) |
+| Tasks complete | 25 (slices 1, 2a, 2b, 3, 4) |
+| Tasks incomplete | 5: 5.1-5.5, `[APPROVAL]` manual validation on the user's Windows PC |
+Slice 4: 4.1, 4.2 and 4.3 are checked and match the code.
+
+### Build & Tests Execution
+All local runs used `git archive` copies under the session scratchpad (`w4` = candidate, `b4` = base `origin/main` 35fd2b4) with `python3 -B` (Homebrew 3.14.8), HOME redirected, and a descendant-only `os.kill` guard (`guard4/sitecustomize.py`). The guard blocks pid <= 1, the user's poller 59645 and any non-descendant for sig != 0; its block log is empty. Poller 59645 was alive before and after every run.
+
+**Build**: Passed (AST parse of `src/**/*.py`, exit 0).
+
+**Tests (macOS, local)**: `Ran 292 tests ... OK (skipped=8)`, exit 0. The 8 skips are nt-only: LockTest 3, CrossProcessTest 1, RealTerminateTest 4.
+
+**CI (run 38700599818, head 7901b36)**: 6/6 green. Ubuntu and macOS (3.11, 3.13): 292 run, OK (skipped=8). Windows 3.11 (job 116307571620) and 3.13 (job 116307571938): 292 run, OK (skipped=35). The log has 35 `skipped '` lines: HerdrCliTest 5, WindowsBinTest 1, FallbackTest 3, HerdrSocketTest 10, StateStoreTest 1, TestRealSpawn 1, TestRunHardening 1, TestStart 9, PosixHostTest 1, sidebar TestApply 1, TickTest 1, plus 1 multi-line scenario. That is one fewer than 2b's 36 because the slice-4 skip on `test_default_config_is_under_home_and_never_used_by_startup` was removed. LockTest, CrossProcessTest and RealTerminateTest ran `ok` on Windows.
+
+**Coverage**: Not available (`coverage` is not installed).
+
+**Base tests against candidate src**: 281 run, 21 fail. All 21 are FakeHost/WindowsHost API-shape tests that the slice intentionally replaced: the old FakeHost has no `started_at` parameter, and `older_than`, `wall` and the raising `force_terminate` test are gone. Every real-process POSIX test passes unchanged (test_daemon TestStart/TestRun/TestRealSpawn/TestStatus, test_main, TestCli).
+
+**RED reproduced**: Running the candidate tests against base src gives 3 failures and 9 errors, all in the new tests (TestDefaultPath 4, TestApplyReplace 1, StopFileTest 2, GuardTest S7 2, S1 1, identity 2). Two tests are regression locks that already pass on base: `test_creation_window_boundaries_are_inclusive` and `test_run_without_a_home_directory_is_a_short_error`.
+
+### Focus 1: config path precedence and no-home handling
+`sidebar_patch.py:178-187` follows this order: `HERDR_CONFIG_PATH` > `XDG_CONFIG_HOME/herdr/config.toml` > `%APPDATA%\herdr\config.toml` (only when `os.name == "nt"`) > `home()/.config/herdr/config.toml`. Empty values count as unset. Home is resolved lazily (`(home or Path.home)()`), so a higher source never needs a home. This matches spec sidebar-metadata order exactly. `main()` (`:197-200`) maps RuntimeError/KeyError/OSError to `sidebar-patch: cannot locate the home directory; pass --config PATH` with rc 1 and no traceback. `--config` still overrides everything.
+
+`src/main.py:39` resolves `Path.home()` before `make_logger`, and `_dispatch` maps the failure to `cannot start (RuntimeError)`, rc 1. Reproduced on macOS: the base ignores `XDG_CONFIG_HOME` (it points at `$HOME/.config/herdr/config.toml`), and the candidate patches `$XDG_CONFIG_HOME/herdr/config.toml`. On POSIX a "no home" state is practically unreachable, because `Path.home()` falls back to `pwd`.
+
+### Focus 2: W1 stop-file identity protocol
+- **Write** (`host_windows.py:116-118`): `poller.stop` = `{"pid": verified_pid, "started_at": started_at}`. `daemon._terminate` (`daemon.py:190-192`) passes the pidfile `started_at`. Both values are null when the identity is unverified.
+- **Read**: in the loop, `stop_requested` is `exists()` (`:120-121`), so any stop file is honored, whatever it names. At startup, `clear_stop(d, own)` (`:123-133`) keeps the file only when it parses to a dict whose `(pid, started_at)` equals `own` exactly. Unreadable, malformed, non-dict or other-identity files are unlinked. On exit, the clear is unconditional (`daemon.py:122`, guarded by `_safely`, before `release`).
+- **Startup clear placement** (`daemon.py:114-118`): lock, then `record_identity`, then `info` (pid, `clock.now()`), then `clear_stop(own)`, then pidfile write. `started_at` is the poller's own float, and the pidfile is written only after the clear. A stop that names this poller can therefore be written only after its startup clear. The "keep" branch is defensive and can never discard a fresh named request.
+- **Stale honored at startup?** No. That would need a stop file naming the exact same pid and the exact same float `started_at`, which a recycled pid of an older run cannot produce. Verified with a hybrid host (real `WindowsHost` stop-file methods plus an in-memory lock): a stale file naming `(same pid, 999.0)` and a file naming `(null, null)` are both cleared, and the poller runs.
+- **Stop lost?** Yes, in a residual window. A `stop` whose `held()` sees the new poller (or a dying predecessor) before the new poller's pidfile exists sends an unverified `{null, null}`, or a stale `{A}`, request. If that write lands before the new poller's startup unlink, the request is erased. Reproduced: the racing stop has `verified_pid=None`, so no force step runs, the result is `failed` (rc 1, `handoff_failed` logged), and the poller keeps ticking. A follow-up stop returns `stopped` and leaves no stop file. If the write lands after the unlink, the loop honors it. Window size: from the new poller's `acquire_lock` to the unlink in `clear_stop`. Measured with real file ops on macOS APFS: about 21 us (identity write plus clear, no file) and about 227 us including the stop's own write, read and unlink. NTFS with filter drivers is likely slower; this is an estimate, not measured on Windows. The `stop` must start inside that window, or stall across a full restart handoff (predecessor exit, then `start` polls at 1 s, then interpreter startup). The outcome is always visible and retryable. This is the same inherent window as 2a and 2b, but now deterministic: no clock-granularity dependence. The 2b-W1 (NTFS mtime) defect is closed.
+- **Stale honored in the loop?** Yes, narrowly. A `stop` that read the predecessor's identity and stalls across the restart handoff writes `{A}` after the new poller's startup clear, and the new poller exits (reproduced, case D). The user's intent was to stop the plugin, so the impact is limited to a stop racing a socket-change restart. SECURITY.md:17 does not mention this residual.
+
+### Focus 3: S1 and S7
+- **S1** (`daemon.py:195-196`): a refused force, or an unverified pid, now returns `not host.held(state_dir)` instead of `False`. A poller that exited between the last `_wait_free` poll and the force guard is now reported `stopped`, and a restart then spawns. A still-held lock stays `failed`, and no extra wait or signal happens. POSIX: `PosixHost.force_terminate` is always False, so the only change is the same race (SIGTERM sent, exit after 8 s, so `stopped` instead of `failed`). Correct. Killed by `test_refused_force_after_the_poller_exited_meanwhile_is_stopped`.
+- **S7** (`host_windows.py:140-161`): every Win32 step (`Win32()` construction, `open_process`, `creation_time`, `terminate`) is inside `try`. Any `Exception` prints `force terminate refused (<TypeName>)` to stderr, with no message text, so no path leaks, and returns False. `finally` closes only a non-null handle, and a close error is swallowed. When `Win32()` or `open_process` raises, `handle` is None, so the unbound-`win32` reference in `finally` is never reached. Correct.
+- **S5**: `sidebar_patch.apply` now uses `replace_with_retry` (`:170`).
+
+### Mutation testing (23 mutants, full suite, archive copy, descendant-only guard)
+| Mutants | Result |
+|---------|--------|
+| P1-P8 config path (XDG before env, APPDATA on every OS, APPDATA before XDG, empty XDG as set, XDG ignored, no-home uncaught, eager home, bare `os.replace`) | 8/8 KILLED |
+| W1-W9 stop file and force (pid-only match, malformed kept, unconditional clear, started_at dropped, verified-only request, force re-raises, logs message text, no close on error, no dict check) | 9/9 KILLED |
+| D1-D5 daemon (S1 revert, unconditional startup clear, conditional exit clear (2b D9), request without started_at, own with wrong started_at) | 5/5 KILLED |
+| M1 `projects` resolved after `make_logger` in main.py | SURVIVED (regression lock only; the visible result is identical, and only a log file is opened) |
+
+### Focus 4: docs accuracy
+| Claim | Evidence | Verdict |
+|-------|----------|---------|
+| Windows "Experimental", CI only, needs manual validation (README:21, 66, 165; SECURITY:24) | matches the state (slice 5 pending) | Accurate |
+| `py -3` launcher; python.org or install manager provide `py.exe`; Store-only Python has none (README:68) | manifest argv `py -3 -X utf8 -B`; explore.md "Python on Windows" | Accurate |
+| `py -3` picks the newest Python 3; < 3.11 exits with a clear message (README:69) | `main.py:5-7` rc 2 | Accurate (`PY_PYTHON3`/`py.ini` can change the pick; not stated) |
+| `*-windows` actions (README:70-76) | `herdr-plugin.toml` ids | Accurate |
+| `HERDR_BIN_PATH` absolute `herdr.exe`, other types rejected (README:78; SECURITY:18) | `herdr_cli.py:37-43` (any `.exe` is accepted, case-insensitive) | Accurate |
+| `%APPDATA%\herdr\config.toml`, overridable by env/XDG (README:79, 85) | `sidebar_patch.py:178-187`; explore.md:22 (Herdr facts) | Accurate |
+| CLI-only transport on Windows (README:80) | `main.py:41` `supports_socket` | Accurate |
+| Stop file, then guarded force (README:81; SECURITY:16) | `host_windows.py:116-161`, `daemon.py:190-197`; 60 s window inclusive (`test_creation_window_boundaries_are_inclusive`) | Accurate |
+| SECURITY:17 stale stop row | `clear_stop(own)`, exit clear | Accurate for the startup case; the in-loop stalled-stop residual is not listed (S3) |
+| Test table: Unit 50, Adapters 79, Scenarios 24, Lifecycle 136, Support 3, total 292 (README:128-133) | recount from `-v` output by package: 50/79/24/136/3 = 292 | Accurate |
+| CI skips: Windows 35, macOS/Linux 8 (README:135) | run 38700599818 logs | Accurate |
+| `%USERPROFILE%\.claude\projects` (README:145) | `Path.home()` on nt uses USERPROFILE | Accurate |
+| `CLAUDE_CONFIG_DIR` gap (README:166; SECURITY:25) | `main.py:39` | Accurate |
+| "hidden detached process" (README:164) | spawn flags `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`, not `DETACHED_PROCESS` | Colloquial; could be misread as `DETACHED_PROCESS` (S4) |
+| Shell fallback on Windows (README:158) | needs `HERDR_PLUGIN_STATE_DIR`; the `VAR=x cmd` prefix is POSIX syntax | Incomplete for PowerShell/cmd (S4) |
+| Restart/Disable/Uninstall "run the `stop` action" (README:155-157) | on Windows the id is `stop-windows` | Implicit only via README:70 (S4) |
+| SECURITY:13 "`flock` on the lock file" | Windows uses `msvcrt.locking` | Not updated for Windows (S4) |
+| design.md interfaces | match `ports.py`; stale: `verified_pid ... and held()` (design:47), flow "touch poller.stop" and no refused-force branch (design:53-55), "test `launcher` prefix" (design:70) never implemented | Partly stale (S5) |
+No overclaiming of Windows support was found.
+
+### Focus 6: POSIX unchanged except the config path
+The real-process POSIX tests from base pass unchanged against candidate src. POSIX daemon deltas: the extra `started_at` argument is ignored by `PosixHost.request_stop`, `clear_stop` stays a no-op, and S1 only changes a late-exit race from `failed` to `stopped`. The only user-visible POSIX change is that `sidebar-patch` now honors `XDG_CONFIG_HOME` on macOS and Linux (reproduced). The spec allows this, since XDG is an override variable, but the README documents XDG only as a Windows override (README:79). The POSIX sidebar paragraph (README:85) still lists `~/.config/herdr/config.toml` or `$HERDR_CONFIG_PATH` only. See W2.
+
+### Spec Compliance Matrix (change-wide)
+| Requirement | Scenario | Test | Result |
+|-------------|----------|------|--------|
+| Platform adapter selection | Windows selection | `TestHostSelection.test_default_host_follows_the_os_name`; Windows CI test_main subprocess runs | COMPLIANT |
+| Platform adapter selection | POSIX selection | base real-process POSIX tests pass on candidate; TestHostSelection | COMPLIANT |
+| Windows single-instance lock | Second instance | LockTest, CrossProcessTest (Windows CI ok) | COMPLIANT |
+| Windows single-instance lock | Crashed holder | CrossProcessTest (killed holder frees the lock) | PARTIAL (no `start` with a real WindowsHost after a crash; not in the slice-5 checklist) |
+| Windows spawn | Spawn flags | `SpawnTest.test_spawn_flags_and_argv`; `test_windows_runs_with_create_no_window_and_no_shell` | COMPLIANT ("no console window appears" is visual, manual 5.1) |
+| Windows liveness without signals | Liveness probe | `RealTerminateTest.test_liveness_and_stop_never_use_os_kill` (Windows CI) | COMPLIANT |
+| Launcher and manifest | Manifest | TestManifest | COMPLIANT |
+| CLI-only Herdr transport | No AF_UNIX | `test_socket_client_is_built_only_when_the_host_supports_it` | PARTIAL (no real `HerdrCli._run` on Windows; manual 5.1) |
+| CLI-only Herdr transport | AttributeError on POSIX | `test_attribute_error_from_missing_transport_falls_back_to_cli` | COMPLIANT |
+| Atomic state replace retry | Transient sharing violation | test_atomic, test_state_store, `TestApplyReplace` | COMPLIANT |
+| Atomic state replace retry | Persistent failure | test_atomic | COMPLIANT |
+| CI and documentation status | Matrix | run 38700599818, 6 jobs; docs: README:21/64-81/164-165 | COMPLIANT |
+| Single detached poller | Handoff re-run | TestStart, TestRun (POSIX) | COMPLIANT |
+| Single detached poller | Stale pidfile | TestStart (POSIX) | COMPLIANT |
+| Single detached poller | No connectivity (C13) | baseline, not re-audited | PARTIAL (Herdr restart is manual 5.3) |
+| Single detached poller | Windows concurrent starts | lock tests; `test_second_run_exits_zero_without_ticking` on Windows | PARTIAL (no concurrent `start` on Windows; manual 5.3 only partly) |
+| Stop and status actions | Stop | TestRun, TestRealSpawn (POSIX) | COMPLIANT |
+| Stop and status actions | Windows cooperative stop | StopFileTest, PollerStopFileTest, StopWaitTest | PARTIAL (no real end-to-end; manual 5.2) |
+| Stop and status actions | Stopping status | StatusStoppingTest | COMPLIANT |
+| Stop and status actions | Forced termination | ForceTerminateFlowTest, GuardTest, `RealTerminateTest.test_matching_child...` (Windows CI) | COMPLIANT |
+| Stop and status actions | Pid reuse guard | GuardTest refusals, `test_no_force_without_a_verified_pid`, RealTerminateTest refusal; startup clear of `(null, null)` asserted (`test_a_stop_naming_another_pid_or_run_is_stale_and_cleared`) | PARTIAL ("stale request is cleared" happens at the holder's exit or the next startup, not when the timeout elapses) |
+| Approval-gated config patch | Custom sidebar | TestPlan/TestApply (all OS) | COMPLIANT |
+| Approval-gated config patch | Explicit override | `test_precedence_env_then_xdg_then_appdata_then_home`, `test_default_config_honors_herdr_config_path` | COMPLIANT |
+| Approval-gated config patch | XDG | `test_precedence...`, `test_home_is_not_needed_when_a_higher_source_is_set` | COMPLIANT |
+| Approval-gated config patch | Windows default | `test_precedence...` (os_name nt); TestCli default test runs on Windows CI | COMPLIANT |
+| Approval-gated config patch | POSIX default | `test_appdata_is_ignored_off_windows...`, `test_default_config_is_under_home...` | COMPLIANT |
+**Compliance summary**: 20/26 scenarios compliant, 6 PARTIAL, 0 UNTESTED, 0 FAILING. 7/11 requirements are fully complete. Incomplete: Windows single-instance lock, CLI-only transport, Single detached poller, Stop and status actions.
+
+**Scenarios that remain covered only by manual validation (slice 5)**: No AF_UNIX real CLI path (5.1), Windows cooperative stop end-to-end (5.2), No connectivity / Herdr restart (5.3), Windows concurrent starts (only partly, through 5.3). Not on the slice-5 checklist at all: Crashed holder (`start` after a killed poller on Windows) and Pid reuse guard "stale request cleared" (see S6).
+
+### Coherence (Design)
+| Decision | Followed? | Notes |
+|----------|-----------|-------|
+| Config path order | Yes | `sidebar_patch.py:178-187` |
+| Stop file names its target; startup keeps only its own request; exit clears | Yes | design.md:55 updated |
+| HostPlatform interfaces | Yes | design.md:32-35 matches `ports.py:53-55` (ports types `pid`/`started_at` as Optional) |
+| `verified_pid` includes `held()` | No (text stale since slice 1) | S5 |
+| Data flow diagram | Partly | still "touch poller.stop"; no refused-force branch to "stopped" |
+| HerdrCli test `launcher` prefix | Not implemented | already noted in 2b; W2-2b remains |
+
+### TDD Compliance
+| Check | Result | Details |
+|-------|--------|---------|
+| TDD Cycle Evidence table | Missing | apply-progress #178 reports RED/GREEN in prose (W3) |
+| RED reproduced independently | Yes | 12 new tests fail on base src; 2 are declared regression locks |
+| GREEN | Yes | 292/292 local (8 nt skips), 6/6 CI |
+| Triangulation | Yes | precedence chain, empty values, lazy home, 4 junk payloads, 2 foreign identities, both window boundaries |
+| Safety net | Yes | the 21 replaced base tests are API-shape only; all real-process base tests pass |
+
+### Test Layer Distribution
+Unit: TestDefaultPath (4), TestApplyReplace (1), StopFileTest identity (2), PollerStopFileTest (4), GuardTest S7/WC1 (3), ForceTerminateFlowTest S1 (1), test_main no-home (1). Integration: TestCli subprocess (Windows default path on Windows CI). E2E: none (manual slice 5).
+
+### Issues Found
+**CRITICAL**: None
+
+**WARNING**:
+- W1 Windows test reads the real user config. `test_sidebar_patch.py:306-310` (`test_default_config_is_under_home_and_never_used_by_startup`, unskipped in this slice) sets only HOME. `child_env` forwards the real `APPDATA` (`tests/support.py:29`), so on Windows the default resolves to the real `%APPDATA%\herdr\config.toml`. The comment "HOME is a tempdir: no real config touched" is false there. It passes on CI only because the runner has no Herdr config. On a Windows machine with Herdr configured (the slice-5 PC), `--print` reads the user's config (read-only) and the test fails (rc 0 or "already present"). Fix: pass `APPDATA=str(self.dir)` (and unset `XDG_CONFIG_HOME`) in `run_cli`.
+- W2 The POSIX behavior change is undocumented. `sidebar-patch` now honors `XDG_CONFIG_HOME` on macOS and Linux (`sidebar_patch.py:183-184`, reproduced), but README:85 lists only `~/.config/herdr/config.toml`, `%APPDATA%` and `$HERDR_CONFIG_PATH`, and README:79 mentions XDG only under Windows. A macOS user with `XDG_CONFIG_HOME` set is shown or patched a different file than before. This is in-spec, but it should be stated, for example "`$XDG_CONFIG_HOME/herdr/config.toml` when set".
+- W3 Strict TDD evidence format: still no TDD Cycle Evidence table (repeat of earlier slices). It is kept as a WARNING per precedent, because RED was reproduced independently and 22/23 mutants are killed.
+
+**SUGGESTION**:
+- S1 Residual lost stop (W1 protocol, `daemon.py:114-117`, `host_windows.py:123-133`). A stop written between the new poller's lock acquisition and its startup unlink is erased, and the stop returns `failed` (visible, retryable). Measured window: about 21-227 us on APFS. Optional hardening: in `_terminate`, if the wait fails, `pid` was None and the stop file is gone, re-read the identity and re-request once.
+- S2 Mutant M1 survives. Nothing asserts that `Path.home()` runs before `make_logger` (`main.py:39`). Low impact.
+- S3 SECURITY.md:17: add the in-loop residual. A `stop` that stalls across a restart handoff can stop the freshly started poller, because the loop honors any stop file.
+- S4 README wording: "hidden detached process" (README:164; it is not `DETACHED_PROCESS`); the Windows shell fallback needs PowerShell env syntax (`$env:HERDR_PLUGIN_STATE_DIR=...`) (README:158); Restart/Disable/Uninstall should say `stop-windows` on Windows (README:155-157); SECURITY.md:13 still says only `flock`; README:69 could mention `PY_PYTHON3`/`py.ini`.
+- S5 design.md: remove "`and held()` is True" (design:47), update the data-flow diagram (JSON stop file, refused force then `not held`), and drop or mark the unimplemented HerdrCli test `launcher` prefix (design:70).
+- S6 Add to the slice-5 checklist: (a) kill the poller in Task Manager, then `start-windows` starts a new one (Crashed holder); (b) two quick `start-windows` invocations leave exactly one python process (Windows concurrent starts); (c) after a `stop-windows` that returns `failed`, the stop file is gone after the next start; (d) run the test suite on the PC only after the W1 fix.
+- S7 Process note: during the POSIX parity probe with `env -i` (HOME unset), `Path.home()` fell back to `pwd`, and one `sidebar-patch --print` read the user's real `~/.config/herdr/config.toml` (print-only, nothing written; output "$tokens is already present"). For future probes, always set HOME, or pass `HERDR_CONFIG_PATH` or `--config`.
+
+### Verdict
+The envelope says `fail` because the change is not archive-ready: 7/11 requirements and 20/26 scenarios are proven, and slice 5 (tasks 5.1-5.5, manual Windows validation) is pending. There are 0 blockers and 0 CRITICAL.
+
+Slice 4 verdict: PASS WITH WARNINGS
+The config path matches the spec order with lazy home and a clean no-home error. The stop-file identity protocol is deterministic, honors no stale request at startup, and closes 2b-W1. Its only residual is the inherent lock-to-clear window, which is visible as `failed` and retryable. S1, S5 and S7 are correct, and 22/23 mutants are killed. Docs are accurate, with test counts recounted at 50/79/24/136/3 = 292 and CI skips 35/8. Open items: W1 (a Windows test reads the real `%APPDATA%` config), W2 (XDG on POSIX undocumented) and W3 (TDD table). Remaining for archive: run and record 5.1-5.5 on the user's Windows PC (ideally after the W1 test fix and with the S6 additions), then re-verify those six PARTIAL scenarios.
